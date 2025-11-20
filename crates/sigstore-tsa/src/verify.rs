@@ -94,7 +94,7 @@ impl<'a> VerifyOpts<'a> {
     }
 }
 
-impl<'a> Default for VerifyOpts<'a> {
+impl Default for VerifyOpts<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -313,8 +313,8 @@ fn verify_message_imprint(tst_info: &TstInfo, signature_bytes: &[u8]) -> Result<
 }
 
 /// Verify the CMS signature and return the signer certificate
-fn verify_cms_signature<'a>(
-    signed_data: &'a SignedData,
+fn verify_cms_signature(
+    signed_data: &SignedData,
     tst_info_der: &[u8],
     timestamp_response_bytes: &[u8],
     opts: &VerifyOpts,
@@ -394,9 +394,9 @@ fn extract_certificates(signed_data: &SignedData) -> Vec<Certificate> {
 }
 
 /// Find the signer certificate that matches the SignerIdentifier
-fn find_signer_certificate<'a>(
+fn find_signer_certificate(
     signer_id: &SignerIdentifier,
-    certificates: &'a [Certificate],
+    certificates: &[Certificate],
 ) -> Result<Certificate> {
     match signer_id {
         SignerIdentifier::IssuerAndSerialNumber(issuer_serial) => {

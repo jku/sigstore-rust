@@ -256,7 +256,7 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let mut hasher = Sha256::new();
     hasher.update(&artifact_data);
     let artifact_hash = hasher.finalize();
-    let artifact_hash_hex = hex::encode(&artifact_hash);
+    let artifact_hash_hex = hex::encode(artifact_hash);
 
     // Upload to Rekor
     let rekor = RekorClient::new(&rekor_url);

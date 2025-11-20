@@ -385,7 +385,7 @@ mod tests {
             "c2lnbmF0dXJl",
             "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
         );
-        assert!(entry.request.digest.len() > 0);
+        assert!(!entry.request.digest.is_empty());
         assert_eq!(entry.request.signature.content, "c2lnbmF0dXJl");
     }
 }

@@ -382,6 +382,17 @@ impl TrustedRoot {
     }
 }
 
+/// Embedded production trusted root from https://tuf-repo-cdn.sigstore.dev/
+/// This is the default trusted root for Sigstore's public production instance.
+pub const SIGSTORE_PRODUCTION_TRUSTED_ROOT: &str = include_str!("trusted_root.json");
+
+impl TrustedRoot {
+    /// Load the default Sigstore production trusted root
+    pub fn production() -> Result<Self> {
+        Self::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -424,16 +435,5 @@ mod tests {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
         assert!(root.has_rekor_key("test-key-id"));
         assert!(!root.has_rekor_key("non-existent"));
-    }
-}
-
-/// Embedded production trusted root from https://tuf-repo-cdn.sigstore.dev/
-/// This is the default trusted root for Sigstore's public production instance.
-pub const SIGSTORE_PRODUCTION_TRUSTED_ROOT: &str = include_str!("trusted_root.json");
-
-impl TrustedRoot {
-    /// Load the default Sigstore production trusted root
-    pub fn production() -> Result<Self> {
-        Self::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)
     }
 }
