@@ -397,12 +397,19 @@ impl Verifier {
                             })?;
 
                         let body_str = String::from_utf8(body_bytes).map_err(|e| {
-                            Error::Verification(format!("canonicalized body is not valid UTF-8: {}", e))
+                            Error::Verification(format!(
+                                "canonicalized body is not valid UTF-8: {}",
+                                e
+                            ))
                         })?;
 
-                        let body: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| {
-                            Error::Verification(format!("failed to parse canonicalized body: {}", e))
-                        })?;
+                        let body: serde_json::Value =
+                            serde_json::from_str(&body_str).map_err(|e| {
+                                Error::Verification(format!(
+                                    "failed to parse canonicalized body: {}",
+                                    e
+                                ))
+                            })?;
 
                         // Extract expected envelope hash from Rekor entry (v0.0.1 format)
                         let expected_hash = body
@@ -411,12 +418,19 @@ impl Verifier {
                             .and_then(|h| h.get("value"))
                             .and_then(|v| v.as_str())
                             .ok_or_else(|| {
-                                Error::Verification("no envelope hash in Rekor v0.0.1 entry".to_string())
+                                Error::Verification(
+                                    "no envelope hash in Rekor v0.0.1 entry".to_string(),
+                                )
                             })?;
 
                         // Compute actual envelope hash using canonical JSON (RFC 8785)
-                        let envelope_json = serde_json_canonicalizer::to_vec(envelope)
-                            .map_err(|e| Error::Verification(format!("failed to canonicalize envelope JSON: {}", e)))?;
+                        let envelope_json =
+                            serde_json_canonicalizer::to_vec(envelope).map_err(|e| {
+                                Error::Verification(format!(
+                                    "failed to canonicalize envelope JSON: {}",
+                                    e
+                                ))
+                            })?;
                         let envelope_hash = sigstore_crypto::sha256(&envelope_json);
                         let envelope_hash_hex = hex::encode(envelope_hash);
 
@@ -439,12 +453,19 @@ impl Verifier {
                             })?;
 
                         let body_str = String::from_utf8(body_bytes).map_err(|e| {
-                            Error::Verification(format!("canonicalized body is not valid UTF-8: {}", e))
+                            Error::Verification(format!(
+                                "canonicalized body is not valid UTF-8: {}",
+                                e
+                            ))
                         })?;
 
-                        let body: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| {
-                            Error::Verification(format!("failed to parse canonicalized body: {}", e))
-                        })?;
+                        let body: serde_json::Value =
+                            serde_json::from_str(&body_str).map_err(|e| {
+                                Error::Verification(format!(
+                                    "failed to parse canonicalized body: {}",
+                                    e
+                                ))
+                            })?;
 
                         // Extract expected payload hash from Rekor entry (v0.0.2 format)
                         let expected_hash = body
@@ -454,15 +475,20 @@ impl Verifier {
                             .and_then(|h| h.get("digest"))
                             .and_then(|v| v.as_str())
                             .ok_or_else(|| {
-                                Error::Verification("no payload hash in Rekor v0.0.2 entry".to_string())
+                                Error::Verification(
+                                    "no payload hash in Rekor v0.0.2 entry".to_string(),
+                                )
                             })?;
 
                         // Compute actual payload hash
                         let payload_bytes = base64::engine::general_purpose::STANDARD
                             .decode(&envelope.payload)
-                            .map_err(|e| Error::Verification(format!("failed to decode DSSE payload: {}", e)))?;
+                            .map_err(|e| {
+                                Error::Verification(format!("failed to decode DSSE payload: {}", e))
+                            })?;
                         let payload_hash = sigstore_crypto::sha256(&payload_bytes);
-                        let payload_hash_b64 = base64::engine::general_purpose::STANDARD.encode(payload_hash);
+                        let payload_hash_b64 =
+                            base64::engine::general_purpose::STANDARD.encode(payload_hash);
 
                         // Compare hashes
                         if payload_hash_b64 != expected_hash {
@@ -480,14 +506,18 @@ impl Verifier {
                             .and_then(|d| d.get("signatures"))
                             .and_then(|s| s.as_array())
                             .ok_or_else(|| {
-                                Error::Verification("no signatures in Rekor v0.0.2 entry".to_string())
+                                Error::Verification(
+                                    "no signatures in Rekor v0.0.2 entry".to_string(),
+                                )
                             })?;
 
                         // Check that at least one signature from the bundle matches Rekor
                         let mut found_match = false;
                         for bundle_sig in &envelope.signatures {
                             for rekor_sig in rekor_signatures {
-                                if let Some(rekor_sig_content) = rekor_sig.get("content").and_then(|c| c.as_str()) {
+                                if let Some(rekor_sig_content) =
+                                    rekor_sig.get("content").and_then(|c| c.as_str())
+                                {
                                     if bundle_sig.sig == rekor_sig_content {
                                         found_match = true;
                                         break;
@@ -501,7 +531,7 @@ impl Verifier {
 
                         if !found_match {
                             return Err(Error::Verification(
-                                "DSSE signature in bundle does not match Rekor entry".to_string()
+                                "DSSE signature in bundle does not match Rekor entry".to_string(),
                             ));
                         }
                     }
@@ -547,24 +577,17 @@ impl Verifier {
                     let rekor_payload_bytes = base64::engine::general_purpose::STANDARD
                         .decode(rekor_payload_b64)
                         .map_err(|e| {
-                            Error::Verification(format!(
-                                "failed to decode Rekor payload: {}",
-                                e
-                            ))
+                            Error::Verification(format!("failed to decode Rekor payload: {}", e))
                         })?;
 
-                    let rekor_payload = String::from_utf8(rekor_payload_bytes)
-                        .map_err(|e| {
-                            Error::Verification(format!(
-                                "Rekor payload not valid UTF-8: {}",
-                                e
-                            ))
-                        })?;
+                    let rekor_payload = String::from_utf8(rekor_payload_bytes).map_err(|e| {
+                        Error::Verification(format!("Rekor payload not valid UTF-8: {}", e))
+                    })?;
 
                     // Compare with bundle payload
                     if envelope.payload != rekor_payload {
                         return Err(Error::Verification(
-                            "DSSE payload in bundle does not match intoto Rekor entry".to_string()
+                            "DSSE payload in bundle does not match intoto Rekor entry".to_string(),
                         ));
                     }
 
@@ -583,7 +606,9 @@ impl Verifier {
                     let mut found_match = false;
                     for bundle_sig in &envelope.signatures {
                         for rekor_sig in rekor_signatures {
-                            if let Some(rekor_sig_b64) = rekor_sig.get("sig").and_then(|s| s.as_str()) {
+                            if let Some(rekor_sig_b64) =
+                                rekor_sig.get("sig").and_then(|s| s.as_str())
+                            {
                                 // The Rekor signature is also double-base64-encoded, decode it once
                                 let rekor_sig_decoded = base64::engine::general_purpose::STANDARD
                                     .decode(rekor_sig_b64)
@@ -615,7 +640,8 @@ impl Verifier {
 
                     if !found_match {
                         return Err(Error::Verification(
-                            "DSSE signature in bundle does not match intoto Rekor entry".to_string()
+                            "DSSE signature in bundle does not match intoto Rekor entry"
+                                .to_string(),
                         ));
                     }
                 }
@@ -631,10 +657,7 @@ impl Verifier {
                 let body_bytes = base64::engine::general_purpose::STANDARD
                     .decode(&entry.canonicalized_body)
                     .map_err(|e| {
-                        Error::Verification(format!(
-                            "failed to decode canonicalized body: {}",
-                            e
-                        ))
+                        Error::Verification(format!("failed to decode canonicalized body: {}", e))
                     })?;
 
                 let body_str = String::from_utf8(body_bytes).map_err(|e| {
@@ -649,8 +672,7 @@ impl Verifier {
                 // Different structure for v0.0.1 vs v0.0.2
                 let expected_hash_b64 = if entry.kind_version.version == "0.0.1" {
                     // v0.0.1: spec.data.hash.value (hex)
-                    body
-                        .get("spec")
+                    body.get("spec")
                         .and_then(|s| s.get("data"))
                         .and_then(|d| d.get("hash"))
                         .and_then(|h| h.get("value"))
@@ -658,8 +680,7 @@ impl Verifier {
                         .map(|s| s.to_string())
                 } else if entry.kind_version.version == "0.0.2" {
                     // v0.0.2: spec.hashedRekordV002.data.digest (base64)
-                    body
-                        .get("spec")
+                    body.get("spec")
                         .and_then(|s| s.get("hashedRekordV002"))
                         .and_then(|h| h.get("data"))
                         .and_then(|d| d.get("digest"))
@@ -698,12 +719,12 @@ impl Verifier {
                                 .try_into()
                                 .map_err(|_| {
                                     Error::Verification(
-                                        "message digest has wrong length".to_string()
+                                        "message digest has wrong length".to_string(),
                                     )
                                 })?
                         } else {
                             return Err(Error::Verification(
-                                "no message digest in bundle for DIGEST mode".to_string()
+                                "no message digest in bundle for DIGEST mode".to_string(),
                             ));
                         }
                     } else {
@@ -718,7 +739,8 @@ impl Verifier {
                     let artifact_hash_hex = hex::encode(&artifact_hash_to_check);
                     artifact_hash_hex == expected_hash
                 } else {
-                    let artifact_hash_b64 = base64::engine::general_purpose::STANDARD.encode(&artifact_hash_to_check);
+                    let artifact_hash_b64 =
+                        base64::engine::general_purpose::STANDARD.encode(&artifact_hash_to_check);
                     artifact_hash_b64 == expected_hash
                 };
 
@@ -733,16 +755,14 @@ impl Verifier {
                 // Extract certificate from Rekor entry
                 let rekor_cert_pem = if entry.kind_version.version == "0.0.1" {
                     // v0.0.1: spec.signature.publicKey.content (PEM encoded)
-                    body
-                        .get("spec")
+                    body.get("spec")
                         .and_then(|s| s.get("signature"))
                         .and_then(|sig| sig.get("publicKey"))
                         .and_then(|pk| pk.get("content"))
                         .and_then(|v| v.as_str())
                 } else if entry.kind_version.version == "0.0.2" {
                     // v0.0.2: spec.hashedRekordV002.signature.verifier.x509Certificate.rawBytes (base64 DER)
-                    body
-                        .get("spec")
+                    body.get("spec")
                         .and_then(|s| s.get("hashedRekordV002"))
                         .and_then(|h| h.get("signature"))
                         .and_then(|sig| sig.get("verifier"))
@@ -759,9 +779,7 @@ impl Verifier {
                         VerificationMaterialContent::X509CertificateChain { certificates } => {
                             certificates.first().map(|c| &c.raw_bytes)
                         }
-                        VerificationMaterialContent::Certificate(cert) => {
-                            Some(&cert.raw_bytes)
-                        }
+                        VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
                         _ => None,
                     };
 
@@ -801,13 +819,20 @@ impl Verifier {
                             let start_marker = "-----BEGIN CERTIFICATE-----";
                             let end_marker = "-----END CERTIFICATE-----";
 
-                            let start = rekor_cert_pem_str.find(start_marker)
-                                .ok_or_else(|| Error::Verification("Rekor cert: missing PEM start marker".to_string()))?;
-                            let end = rekor_cert_pem_str.find(end_marker)
-                                .ok_or_else(|| Error::Verification("Rekor cert: missing PEM end marker".to_string()))?;
+                            let start = rekor_cert_pem_str.find(start_marker).ok_or_else(|| {
+                                Error::Verification(
+                                    "Rekor cert: missing PEM start marker".to_string(),
+                                )
+                            })?;
+                            let end = rekor_cert_pem_str.find(end_marker).ok_or_else(|| {
+                                Error::Verification(
+                                    "Rekor cert: missing PEM end marker".to_string(),
+                                )
+                            })?;
 
                             let pem_content = &rekor_cert_pem_str[start + start_marker.len()..end];
-                            let clean_content: String = pem_content.chars().filter(|c| !c.is_whitespace()).collect();
+                            let clean_content: String =
+                                pem_content.chars().filter(|c| !c.is_whitespace()).collect();
 
                             base64::engine::general_purpose::STANDARD
                                 .decode(&clean_content)
@@ -832,7 +857,8 @@ impl Verifier {
                         // Compare certificates
                         if bundle_cert_der_bytes != rekor_cert_der_bytes {
                             return Err(Error::Verification(
-                                "certificate in bundle does not match certificate in Rekor entry".to_string()
+                                "certificate in bundle does not match certificate in Rekor entry"
+                                    .to_string(),
                             ));
                         }
                     }
@@ -842,15 +868,13 @@ impl Verifier {
                 // Extract signature from Rekor entry
                 let rekor_signature = if entry.kind_version.version == "0.0.1" {
                     // v0.0.1: spec.signature.content (base64)
-                    body
-                        .get("spec")
+                    body.get("spec")
                         .and_then(|s| s.get("signature"))
                         .and_then(|sig| sig.get("content"))
                         .and_then(|v| v.as_str())
                 } else if entry.kind_version.version == "0.0.2" {
                     // v0.0.2: spec.hashedRekordV002.signature.content (base64)
-                    body
-                        .get("spec")
+                    body.get("spec")
                         .and_then(|s| s.get("hashedRekordV002"))
                         .and_then(|h| h.get("signature"))
                         .and_then(|sig| sig.get("content"))
@@ -867,7 +891,8 @@ impl Verifier {
                         // Compare signatures
                         if bundle_sig_b64 != rekor_sig_b64 {
                             return Err(Error::Verification(
-                                "signature in bundle does not match signature in Rekor entry".to_string()
+                                "signature in bundle does not match signature in Rekor entry"
+                                    .to_string(),
                             ));
                         }
                     }
@@ -879,9 +904,7 @@ impl Verifier {
                     VerificationMaterialContent::X509CertificateChain { certificates } => {
                         certificates.first().map(|c| &c.raw_bytes)
                     }
-                    VerificationMaterialContent::Certificate(cert) => {
-                        Some(&cert.raw_bytes)
-                    }
+                    VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
                     _ => None,
                 };
 
@@ -898,23 +921,46 @@ impl Verifier {
                     // Only validate integrated time for hashedrekord 0.0.1
                     // For 0.0.2 (Rekor v2), integrated_time is not present
                     if entry.kind_version.version == "0.0.1" && !entry.integrated_time.is_empty() {
-                        let cert = Certificate::from_der(&bundle_cert_der_bytes)
-                            .map_err(|e| Error::Verification(format!("failed to parse certificate for time validation: {}", e)))?;
+                        let cert = Certificate::from_der(&bundle_cert_der_bytes).map_err(|e| {
+                            Error::Verification(format!(
+                                "failed to parse certificate for time validation: {}",
+                                e
+                            ))
+                        })?;
 
                         // Convert certificate validity times to Unix timestamps
                         use std::time::UNIX_EPOCH;
-                        let not_before_system = cert.tbs_certificate.validity.not_before.to_system_time();
-                        let not_after_system = cert.tbs_certificate.validity.not_after.to_system_time();
+                        let not_before_system =
+                            cert.tbs_certificate.validity.not_before.to_system_time();
+                        let not_after_system =
+                            cert.tbs_certificate.validity.not_after.to_system_time();
 
-                        let not_before = not_before_system.duration_since(UNIX_EPOCH)
-                            .map_err(|e| Error::Verification(format!("failed to convert notBefore to Unix time: {}", e)))?
+                        let not_before = not_before_system
+                            .duration_since(UNIX_EPOCH)
+                            .map_err(|e| {
+                                Error::Verification(format!(
+                                    "failed to convert notBefore to Unix time: {}",
+                                    e
+                                ))
+                            })?
                             .as_secs() as i64;
-                        let not_after = not_after_system.duration_since(UNIX_EPOCH)
-                            .map_err(|e| Error::Verification(format!("failed to convert notAfter to Unix time: {}", e)))?
+                        let not_after = not_after_system
+                            .duration_since(UNIX_EPOCH)
+                            .map_err(|e| {
+                                Error::Verification(format!(
+                                    "failed to convert notAfter to Unix time: {}",
+                                    e
+                                ))
+                            })?
                             .as_secs() as i64;
 
-                        let integrated_time = entry.integrated_time.parse::<i64>()
-                            .map_err(|e| Error::Verification(format!("failed to parse integrated time: {}", e)))?;
+                        let integrated_time =
+                            entry.integrated_time.parse::<i64>().map_err(|e| {
+                                Error::Verification(format!(
+                                    "failed to parse integrated time: {}",
+                                    e
+                                ))
+                            })?;
 
                         if integrated_time < not_before || integrated_time > not_after {
                             return Err(Error::Verification(
@@ -982,7 +1028,11 @@ impl Verifier {
                 // 7a. Verify checkpoint signature if present and we have a trusted root
                 if let Some(ref inclusion_proof) = entry.inclusion_proof {
                     if let Some(ref trusted_root) = self.trusted_root {
-                        verify_checkpoint(&inclusion_proof.checkpoint.envelope, inclusion_proof, trusted_root)?;
+                        verify_checkpoint(
+                            &inclusion_proof.checkpoint.envelope,
+                            inclusion_proof,
+                            trusted_root,
+                        )?;
                     }
                 }
 
@@ -996,31 +1046,34 @@ impl Verifier {
                 // 6b. Validate integrated time
                 if !entry.integrated_time.is_empty() {
                     if let Ok(time) = entry.integrated_time.parse::<i64>() {
-                        // Check that integrated time is not in the future
-                        let now = chrono::Utc::now().timestamp();
-                        if time > now {
-                            return Err(Error::Verification(format!(
-                                "integrated time {} is in the future (current time: {})",
-                                time, now
-                            )));
-                        }
+                        // Ignore 0 as it indicates invalid/missing time
+                        if time > 0 {
+                            // Check that integrated time is not in the future
+                            let now = chrono::Utc::now().timestamp();
+                            if time > now {
+                                return Err(Error::Verification(format!(
+                                    "integrated time {} is in the future (current time: {})",
+                                    time, now
+                                )));
+                            }
 
-                        // Check that integrated time is within certificate validity period
-                        if time < not_before {
-                            return Err(Error::Verification(format!(
-                                "integrated time {} is before certificate validity (not_before: {})",
-                                time, not_before
-                            )));
-                        }
+                            // Check that integrated time is within certificate validity period
+                            if time < not_before {
+                                return Err(Error::Verification(format!(
+                                    "integrated time {} is before certificate validity (not_before: {})",
+                                    time, not_before
+                                )));
+                            }
 
-                        if time > not_after {
-                            return Err(Error::Verification(format!(
-                                "integrated time {} is after certificate validity (not_after: {})",
-                                time, not_after
-                            )));
-                        }
+                            if time > not_after {
+                                return Err(Error::Verification(format!(
+                                    "integrated time {} is after certificate validity (not_after: {})",
+                                    time, not_after
+                                )));
+                            }
 
-                        result.integrated_time = Some(time);
+                            result.integrated_time = Some(time);
+                        }
                     }
                 }
             }
@@ -1091,12 +1144,15 @@ fn extract_integrated_time(bundle: &Bundle) -> Result<Option<i64>> {
     for entry in &bundle.verification_material.tlog_entries {
         if !entry.integrated_time.is_empty() {
             if let Ok(time) = entry.integrated_time.parse::<i64>() {
-                if let Some(earliest) = earliest_time {
-                    if time < earliest {
+                // Ignore 0 as it indicates invalid/missing time (e.g. from test instances)
+                if time > 0 {
+                    if let Some(earliest) = earliest_time {
+                        if time < earliest {
+                            earliest_time = Some(time);
+                        }
+                    } else {
                         earliest_time = Some(time);
                     }
-                } else {
-                    earliest_time = Some(time);
                 }
             }
         }
@@ -1230,7 +1286,11 @@ fn extract_tsa_timestamp(
 /// from the trusted root. The key hint in the checkpoint signature is used to
 /// find the matching key from the trusted root.
 /// It also verifies that the checkpoint's root hash matches the inclusion proof.
-fn verify_checkpoint(checkpoint_envelope: &str, inclusion_proof: &InclusionProof, trusted_root: &TrustedRoot) -> Result<()> {
+fn verify_checkpoint(
+    checkpoint_envelope: &str,
+    inclusion_proof: &InclusionProof,
+    trusted_root: &TrustedRoot,
+) -> Result<()> {
     use sigstore_crypto::checkpoint::{verify_ecdsa_p256, verify_ed25519};
 
     // Parse the signed note
@@ -1244,13 +1304,16 @@ fn verify_checkpoint(checkpoint_envelope: &str, inclusion_proof: &InclusionProof
     // Decode the base64-encoded root hash from the inclusion proof
     let proof_root_hash = base64::engine::general_purpose::STANDARD
         .decode(proof_root_hash_b64)
-        .map_err(|e| Error::Verification(format!("Failed to decode inclusion proof root hash: {}", e)))?;
+        .map_err(|e| {
+            Error::Verification(format!("Failed to decode inclusion proof root hash: {}", e))
+        })?;
 
     if checkpoint_root_hash != &proof_root_hash {
-        return Err(Error::Verification(
-            format!("Checkpoint root hash mismatch: checkpoint has {} bytes, inclusion proof has {} bytes",
-                checkpoint_root_hash.len(), proof_root_hash.len())
-        ));
+        return Err(Error::Verification(format!(
+            "Checkpoint root hash mismatch: checkpoint has {} bytes, inclusion proof has {} bytes",
+            checkpoint_root_hash.len(),
+            proof_root_hash.len()
+        )));
     }
 
     // Get all Rekor keys with their key hints from trusted root

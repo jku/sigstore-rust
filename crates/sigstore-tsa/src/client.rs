@@ -2,7 +2,9 @@
 
 use crate::asn1::{AlgorithmIdentifier, MessageImprint, TimeStampReq, TimeStampResp};
 use crate::error::{Error, Result};
-use der::Encode;
+use cms::content_info::ContentInfo;
+use cms::signed_data::SignedData;
+use der::{Decode, Encode};
 
 /// A client for interacting with a Time-Stamp Authority
 pub struct TimestampClient {
@@ -87,12 +89,45 @@ impl TimestampClient {
             )));
         }
 
-        // Extract the timestamp token
-        let token = tsr.time_stamp_token.ok_or_else(|| {
+        // Extract the timestamp token to verify it exists
+        let token_any = tsr.time_stamp_token.ok_or_else(|| {
             Error::InvalidResponse("response missing timestamp token".to_string())
         })?;
 
-        Ok(token.to_der().unwrap_or_default())
+        // DEBUG: Inspect certificates in the response
+        if let Ok(token_der) = token_any.to_der() {
+            if let Ok(content_info) = ContentInfo::from_der(&token_der) {
+                if let Ok(signed_data_der) = content_info.content.to_der() {
+                    if let Ok(signed_data) = SignedData::from_der(&signed_data_der) {
+                        if let Some(certs) = &signed_data.certificates {
+                            println!(
+                                "DEBUG: TSA Response contains {} certificates",
+                                certs.0.len()
+                            );
+                            for (i, cert_choice) in certs.0.iter().enumerate() {
+                                if let cms::cert::CertificateChoices::Certificate(cert) =
+                                    cert_choice
+                                {
+                                    println!(
+                                        "DEBUG: Cert {}: Subject: {}",
+                                        i, cert.tbs_certificate.subject
+                                    );
+                                    println!(
+                                        "DEBUG: Cert {}: Issuer: {}",
+                                        i, cert.tbs_certificate.issuer
+                                    );
+                                }
+                            }
+                        } else {
+                            println!("DEBUG: TSA Response contains NO certificates");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Return the full response bytes (TimeStampResp) as required by Sigstore bundle
+        Ok(response_bytes.to_vec())
     }
 
     /// Request a timestamp for SHA-256 digest

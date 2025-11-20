@@ -17,6 +17,9 @@ use std::env;
 use std::fs;
 use std::process;
 
+use x509_cert::der::Decode;
+use x509_cert::Certificate;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -112,6 +115,74 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let bundle_path = bundle_path.ok_or("Missing required --bundle")?;
     let artifact_path = artifact_path.ok_or("Missing artifact path")?;
 
+    // Load trusted root if needed for TSA intermediates injection
+    let _trusted_root = if let Some(root_path) = &_trusted_root {
+        Some(TrustedRoot::from_file(root_path)?)
+    } else {
+        // Default to production trusted root when not specified
+        // For staging, we expect the trusted root to be provided via --trusted-root
+        if staging {
+            eprintln!("Warning: Staging mode requested but no trusted root provided. Using production root.");
+        }
+        Some(TrustedRoot::production()?)
+    };
+
+    // Parse signing config if present to get URLs
+    let (fulcio_url, rekor_url, use_rekor_v2, tsa_url) = if let Some(config_path) = &_signing_config
+    {
+        let config_content = fs::read_to_string(config_path)?;
+        let config_json: serde_json::Value = serde_json::from_str(&config_content)?;
+
+        let fulcio_url = config_json
+            .get("caUrls")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|s| s.get("url"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or("No caUrls in signing config")?;
+
+        let tlogs = config_json
+            .get("tlogs")
+            .or_else(|| config_json.get("rekorTlogUrls"))
+            .and_then(|v| v.as_array())
+            .ok_or("No tlogs in signing config")?;
+
+        let log = tlogs.first().ok_or("Empty tlogs list")?;
+        let url = log
+            .get("baseUrl")
+            .or_else(|| log.get("url"))
+            .and_then(|v| v.as_str())
+            .ok_or("No baseUrl or url in tlog")?;
+        let version = log
+            .get("majorApiVersion")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1);
+
+        let tsa_url = config_json
+            .get("tsaUrls")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|t| t.get("url"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        (fulcio_url, url.to_string(), version == 2, tsa_url)
+    } else {
+        let fulcio_url = if staging {
+            "https://fulcio.sigstage.dev".to_string()
+        } else {
+            "https://fulcio.sigstore.dev".to_string()
+        };
+
+        let url = if staging {
+            "https://rekor.sigstage.dev".to_string()
+        } else {
+            "https://rekor.sigstore.dev".to_string()
+        };
+        (fulcio_url, url, false, None)
+    };
+
     // Read artifact
     let artifact_data = fs::read(&artifact_path)?;
 
@@ -124,11 +195,7 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let public_key_pem = key_pair.public_key_to_pem()?;
 
     // Get signing certificate from Fulcio
-    let fulcio_client = if staging {
-        FulcioClient::staging()
-    } else {
-        FulcioClient::public()
-    };
+    let fulcio_client = FulcioClient::new(&fulcio_url);
 
     let proof_of_possession = key_pair.sign(subject.as_bytes())?;
     let cert_response = fulcio_client
@@ -138,7 +205,47 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let leaf_cert_pem = cert_response
         .leaf_certificate()
         .ok_or("No leaf certificate in response")?;
-    let leaf_cert_der_b64 = pem_to_der_base64(leaf_cert_pem)?;
+    // let leaf_cert_der_b64 = pem_to_der_base64(leaf_cert_pem)?;
+
+    // Extract full chain
+    let chain_pem = cert_response
+        .certificate_chain()
+        .ok_or("No certificate chain in response")?;
+    let mut chain_der_b64 = Vec::new();
+    for cert_pem in chain_pem {
+        let der_b64 = pem_to_der_base64(cert_pem)?;
+        let der = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &der_b64)?;
+
+        if let Ok(cert) = Certificate::from_der(&der) {
+            // Check BasicConstraints to exclude CA certificates (Root and Intermediates)
+            // The conformance test test_sign_does_not_produce_root asserts that no cert in the bundle is a CA.
+            use x509_cert::der::Decode;
+            use x509_cert::ext::pkix::BasicConstraints;
+
+            let basic_constraints_oid = "2.5.29.19"
+                .parse::<x509_cert::der::asn1::ObjectIdentifier>()
+                .unwrap();
+
+            let mut is_ca = false;
+            if let Some(extensions) = &cert.tbs_certificate.extensions {
+                for ext in extensions.iter() {
+                    if ext.extn_id == basic_constraints_oid {
+                        if let Ok(bc) = BasicConstraints::from_der(ext.extn_value.as_bytes()) {
+                            if bc.ca {
+                                is_ca = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if is_ca {
+                continue;
+            }
+        }
+
+        chain_der_b64.push(der_b64);
+    }
 
     // Sign the artifact
     let signature = key_pair.sign(&artifact_data)?;
@@ -152,25 +259,36 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let artifact_hash_hex = hex::encode(&artifact_hash);
 
     // Upload to Rekor
-    let rekor = if staging {
-        RekorClient::staging()
+    let rekor = RekorClient::new(&rekor_url);
+
+    let log_entry = if use_rekor_v2 {
+        let hashed_rekord =
+            sigstore::rekor::HashedRekordV2::new(&artifact_hash_hex, &signature_b64, leaf_cert_pem);
+        rekor.create_entry_v2(hashed_rekord).await?
     } else {
-        RekorClient::public()
+        let hashed_rekord =
+            sigstore::rekor::HashedRekord::new(&artifact_hash_hex, &signature_b64, leaf_cert_pem);
+        rekor.create_entry(hashed_rekord).await?
     };
 
-    let hashed_rekord =
-        sigstore::rekor::HashedRekord::new(&artifact_hash_hex, &signature_b64, leaf_cert_pem);
-    let log_entry = rekor.create_entry(hashed_rekord).await?;
-
     // Build bundle
-    let log_id_bytes = hex::decode(&log_entry.log_i_d)?;
+    let log_id_bytes = if use_rekor_v2 {
+        base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &log_entry.log_i_d,
+        )?
+    } else {
+        hex::decode(&log_entry.log_i_d)?
+    };
     let log_id_base64 =
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &log_id_bytes);
+
+    let kind_version = if use_rekor_v2 { "0.0.2" } else { "0.0.1" };
 
     let mut tlog_builder = TlogEntryBuilder::new()
         .log_index(log_entry.log_index as u64)
         .log_id(log_id_base64)
-        .kind("hashedrekord".to_string(), "0.0.1".to_string())
+        .kind("hashedrekord".to_string(), kind_version.to_string())
         .integrated_time(log_entry.integrated_time as u64)
         .canonicalized_body(log_entry.body);
 
@@ -205,11 +323,47 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         }
     }
 
-    let bundle = BundleBuilder::new()
-        .version(MediaType::Bundle0_3)
-        .certificate(leaf_cert_der_b64)
-        .message_signature(signature_b64)
-        .add_tlog_entry(tlog_builder.build())
+    let mut bundle_builder = BundleBuilder::new()
+        .version(MediaType::Bundle0_2)
+        .certificate_chain(chain_der_b64)
+        .message_signature(signature_b64.clone())
+        .add_tlog_entry(tlog_builder.build());
+
+    if let Some(tsa_url) = tsa_url {
+        eprintln!("Using TSA: {}", tsa_url);
+        let tsa_client = sigstore::tsa::TimestampClient::new(tsa_url);
+
+        // Hash the signature
+        let mut hasher = Sha256::new();
+        hasher.update(signature.as_bytes());
+        let signature_digest = hasher.finalize();
+
+        // Timestamp the signature digest
+        let timestamp_der = tsa_client.timestamp_sha256(&signature_digest).await?;
+
+        // Inject intermediates from trusted root if available
+        /*
+        let timestamp_der = if let Some(root) = &trusted_root {
+            match inject_intermediates(&timestamp_der, root) {
+                Ok(der) => der,
+                Err(e) => {
+                    eprintln!("Warning: Failed to inject intermediates: {}", e);
+                    timestamp_der
+                }
+            }
+        } else {
+            timestamp_der
+        };
+        */
+
+        let timestamp_b64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &timestamp_der);
+        bundle_builder = bundle_builder.add_rfc3161_timestamp(timestamp_b64);
+    } else {
+        // eprintln!("No TSA URL found in signing config");
+    }
+
+    let bundle = bundle_builder
         .build()
         .map_err(|e| format!("Failed to build bundle: {}", e))?;
 

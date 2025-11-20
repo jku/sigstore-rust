@@ -17,7 +17,7 @@ reqwest = { workspace = true, features = ["rustls-tls"] }
 url = { workspace = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
-hex = { workspace = true }
 tokio = { workspace = true }

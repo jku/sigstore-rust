@@ -9,6 +9,7 @@ use der::{
     Decode, Encode, Sequence,
 };
 use rand::Rng;
+use x509_cert::{ext::pkix::name::GeneralName, ext::Extensions};
 
 // TODO: use the const ones from `const_oid`
 /// OID for SHA-256: 2.16.840.1.101.3.4.2.1
@@ -274,7 +275,12 @@ pub struct TstInfo {
     /// Nonce
     #[asn1(optional = "true")]
     pub nonce: Option<Int>,
-    // TSA name and extensions omitted for simplicity
+    /// TSA name
+    #[asn1(context_specific = "0", optional = "true", tag_mode = "EXPLICIT")]
+    pub tsa: Option<GeneralName>,
+    /// Extensions
+    #[asn1(context_specific = "1", optional = "true", tag_mode = "IMPLICIT")]
+    pub extensions: Option<Extensions>,
 }
 
 impl TstInfo {
@@ -335,7 +341,10 @@ mod tests {
         let req = TimeStampReq::new(imprint);
 
         // Verify that the request has a nonce
-        assert!(req.nonce.is_some(), "Nonce should be automatically generated");
+        assert!(
+            req.nonce.is_some(),
+            "Nonce should be automatically generated"
+        );
     }
 
     #[test]
@@ -368,7 +377,10 @@ mod tests {
 
             // Verify it can be converted to Int
             let int_result = Int::new(&nonce_bytes);
-            assert!(int_result.is_ok(), "Nonce bytes should be valid for Int::new()");
+            assert!(
+                int_result.is_ok(),
+                "Nonce bytes should be valid for Int::new()"
+            );
         }
     }
 

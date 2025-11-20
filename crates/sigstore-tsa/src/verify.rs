@@ -6,13 +6,13 @@
 //! - Message imprint validation
 //! - TSA Extended Key Usage validation
 
+use crate::asn1::{PkiStatus, TimeStampResp, TstInfo};
 use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
 use cms::cert::CertificateChoices;
 use cms::signed_data::{SignedData, SignerIdentifier};
 use rustls_pki_types::CertificateDer;
 use x509_cert::Certificate;
-use x509_tsp::{TimeStampResp, TstInfo};
 
 // Re-export webpki from rustls-webpki
 use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage, ALL_VERIFICATION_ALGS};
@@ -107,82 +107,10 @@ pub struct TimestampResult {
     pub time: DateTime<Utc>,
 }
 
-/// Wrapper around TimeStampResp that provides convenience methods
-struct TimeStampResponse<'a>(TimeStampResp<'a>);
-
-impl<'a> TimeStampResponse<'a> {
-    /// Whether the time stamp request was successful
-    fn is_success(&self) -> bool {
-        use cmpv2::status::PkiStatus;
-        matches!(
-            self.0.status.status,
-            PkiStatus::Accepted | PkiStatus::GrantedWithMods
-        )
-    }
-
-    /// Decode the SignedData value in the response
-    fn signed_data(&self) -> Result<Option<SignedData>> {
-        use x509_cert::der::{Decode, Encode};
-
-        if let Some(token) = &self.0.time_stamp_token {
-            // Check it's SignedData
-            if token.content_type.to_string() == ID_SIGNED_DATA_STR {
-                // Encode the content to DER and parse as SignedData
-                let signed_data_der = token.content.to_der().map_err(|e| {
-                    Error::ParseError(format!("failed to encode SignedData content: {}", e))
-                })?;
-
-                let signed_data = SignedData::from_der(&signed_data_der).map_err(|e| {
-                    Error::ParseError(format!("failed to decode SignedData: {}", e))
-                })?;
-
-                Ok(Some(signed_data))
-            } else {
-                Err(Error::ParseError("invalid OID on signed data".to_string()))
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Extract the TSTInfo from the SignedData
-    fn tst_info(&self) -> Result<Option<TstInfo>> {
-        use x509_cert::der::Decode;
-
-        if let Some(signed_data) = self.signed_data()? {
-            if signed_data.encap_content_info.econtent_type.to_string() == OID_CONTENT_TYPE_TST_INFO
-            {
-                if let Some(content) = signed_data.encap_content_info.econtent {
-                    // The content is an Any wrapping an OCTET STRING that contains the TSTInfo
-                    let tst_info_bytes = content.value();
-
-                    let tst_info = TstInfo::from_der(tst_info_bytes).map_err(|e| {
-                        Error::ParseError(format!("failed to decode TSTInfo: {}", e))
-                    })?;
-
-                    Ok(Some(tst_info))
-                } else {
-                    Ok(None)
-                }
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-}
-
-impl<'a> From<TimeStampResp<'a>> for TimeStampResponse<'a> {
-    fn from(resp: TimeStampResp<'a>) -> Self {
-        Self(resp)
-    }
-}
-
-/// Verify an RFC 3161 timestamp response.
+/// Verify an RFC 3161 timestamp token (ContentInfo).
 ///
 /// This function:
-/// 1. Parses the timestamp response (DER encoded)
+/// 1. Parses the timestamp token (DER encoded ContentInfo)
 /// 2. Extracts the TSTInfo to get the timestamp
 /// 3. Verifies the message imprint (hash) matches the signature bytes
 /// 4. Verifies the CMS signature using the embedded or provided TSA certificate
@@ -190,7 +118,7 @@ impl<'a> From<TimeStampResp<'a>> for TimeStampResponse<'a> {
 ///
 /// # Arguments
 ///
-/// * `timestamp_response_bytes` - The RFC 3161 timestamp response bytes (DER encoded)
+/// * `timestamp_token_bytes` - The RFC 3161 timestamp token bytes (DER encoded ContentInfo)
 /// * `signature_bytes` - The signature that was timestamped
 /// * `opts` - Verification options including trusted roots and validity period
 ///
@@ -198,42 +126,102 @@ impl<'a> From<TimeStampResp<'a>> for TimeStampResponse<'a> {
 ///
 /// Returns `Ok(TimestampResult)` if verification succeeds, otherwise returns an error.
 pub fn verify_timestamp_response(
-    timestamp_response_bytes: &[u8],
+    timestamp_token_bytes: &[u8],
     signature_bytes: &[u8],
     opts: VerifyOpts<'_>,
 ) -> Result<TimestampResult> {
-    use x509_cert::der::Decode;
+    use cms::content_info::ContentInfo;
+    use x509_cert::der::{Decode, Encode};
 
     #[cfg(feature = "tracing")]
     tracing::debug!("Starting RFC 3161 timestamp verification");
 
-    // Parse the TimeStampResponse
-    let tsr = TimeStampResp::from_der(timestamp_response_bytes)
-        .map_err(|e| Error::ParseError(format!("failed to decode TimeStampResp: {}", e)))?;
+    // Try to parse as TimeStampResp first, if that fails, try as ContentInfo
+    let (content_info, token_bytes) = match TimeStampResp::from_der(timestamp_token_bytes) {
+        Ok(resp) => {
+            // Check status
+            if resp.status.status != PkiStatus::Granted as u8
+                && resp.status.status != PkiStatus::GrantedWithMods as u8
+            {
+                return Err(Error::ParseError(format!(
+                    "Timestamp request not granted: {}",
+                    resp.status.status
+                )));
+            }
 
-    let response = TimeStampResponse::from(tsr);
+            let token_any = resp.time_stamp_token.ok_or(Error::ParseError(
+                "TimeStampResp missing timeStampToken".to_string(),
+            ))?;
+            // We need the DER bytes of the token for signature verification
+            let bytes = token_any
+                .to_der()
+                .map_err(|e| Error::ParseError(format!("failed to re-encode token: {}", e)))?;
 
-    // Check that the response was successful
-    if !response.is_success() {
-        return Err(Error::ResponseFailure);
+            // Parse ContentInfo from bytes
+            let token = ContentInfo::from_der(&bytes).map_err(|e| {
+                Error::ParseError(format!("failed to decode ContentInfo from token: {}", e))
+            })?;
+
+            (token, bytes)
+        }
+        Err(_) => {
+            // Try as ContentInfo directly
+            let token = ContentInfo::from_der(timestamp_token_bytes).map_err(|e| {
+                Error::ParseError(format!("failed to decode TimeStampToken: {}", e))
+            })?;
+            (token, timestamp_token_bytes.to_vec())
+        }
+    };
+
+    // Verify content type is SignedData
+    if content_info.content_type.to_string() != ID_SIGNED_DATA_STR {
+        return Err(Error::ParseError(
+            "ContentInfo content type is not SignedData".to_string(),
+        ));
     }
 
-    // Get the SignedData from the timestamp token
-    let signed_data = response.signed_data()?.ok_or(Error::NoToken)?;
+    // Decode SignedData
+    // content_info.content is Any, which contains the [0] EXPLICIT SignedData
+    // We need to re-encode it to DER to parse it as SignedData?
+    // No, content_info.content IS the SignedData (wrapped in explicit tag?)
+    // cms::content_info::ContentInfo definition:
+    // content: Any, -- [0] EXPLICIT
 
-    // Verify the content type is TSTInfo
+    // We can encode the content to DER, which gives us the bytes of the SignedData structure
+    let signed_data_der = content_info
+        .content
+        .to_der()
+        .map_err(|e| Error::ParseError(format!("failed to encode SignedData content: {}", e)))?;
+
+    let signed_data = SignedData::from_der(&signed_data_der)
+        .map_err(|e| Error::ParseError(format!("failed to decode SignedData: {}", e)))?;
+
+    // Verify the content type inside SignedData is TSTInfo
     if signed_data.encap_content_info.econtent_type.to_string() != OID_CONTENT_TYPE_TST_INFO {
-        return Err(Error::ParseError("content type is not TSTInfo".to_string()));
+        return Err(Error::ParseError(
+            "encap content type is not TSTInfo".to_string(),
+        ));
     }
 
     // Extract the TSTInfo
-    let tst_info = response.tst_info()?.ok_or(Error::NoTstInfo)?;
+    let tst_info = if let Some(content) = &signed_data.encap_content_info.econtent {
+        // The content is an Any wrapping an OCTET STRING that contains the TSTInfo
+        let tst_info_bytes = content.value();
+
+        TstInfo::from_der(tst_info_bytes)
+            .map_err(|e| Error::ParseError(format!("failed to decode TSTInfo: {}", e)))?
+    } else {
+        return Err(Error::NoTstInfo);
+    };
 
     // Verify the message imprint (hash of the signature) matches
     verify_message_imprint(&tst_info, signature_bytes)?;
 
     // Extract the timestamp from TSTInfo
-    let unix_duration = tst_info.gen_time.to_unix_duration();
+    let system_time = tst_info.gen_time.to_system_time();
+    let unix_duration = system_time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| Error::ParseError("timestamp before epoch".to_string()))?;
     let timestamp =
         DateTime::from_timestamp(unix_duration.as_secs() as i64, unix_duration.subsec_nanos())
             .ok_or_else(|| Error::ParseError("invalid timestamp in TSTInfo".to_string()))?;
@@ -272,8 +260,10 @@ pub fn verify_timestamp_response(
 
     #[cfg(feature = "tracing")]
     tracing::debug!("Starting CMS signature verification");
-    let signer_cert =
-        verify_cms_signature(&signed_data, tst_info_der, timestamp_response_bytes, &opts)?;
+    // Note: verify_cms_signature expects timestamp_response_bytes to extract signed_attrs
+    // But now we are passing timestamp_token_bytes (ContentInfo).
+    // extract_signed_attrs_bytes needs to be updated to handle ContentInfo!
+    let signer_cert = verify_cms_signature(&signed_data, tst_info_der, &token_bytes, &opts)?;
     #[cfg(feature = "tracing")]
     tracing::debug!("CMS signature verification completed successfully");
 
@@ -295,7 +285,7 @@ fn verify_message_imprint(tst_info: &TstInfo, signature_bytes: &[u8]) -> Result<
     use aws_lc_rs::digest::{digest, SHA256, SHA384, SHA512};
 
     let message_imprint = &tst_info.message_imprint;
-    let hash_alg_oid = message_imprint.hash_algorithm.oid.to_string();
+    let hash_alg_oid = message_imprint.hash_algorithm.algorithm.to_string();
 
     // Hash the signature bytes using the algorithm specified in the message imprint
     let computed_hash = match hash_alg_oid.as_str() {
@@ -372,7 +362,12 @@ fn verify_cms_signature<'a>(
 
     // Pass the unhashed signed_attrs_bytes - the verification function will hash it
     // using the appropriate algorithm based on BOTH the curve and digest algorithm
-    verify_ecdsa_signature(signature_bytes, &signed_attrs_bytes, &signer_cert, &digest_alg_oid)?;
+    verify_ecdsa_signature(
+        signature_bytes,
+        &signed_attrs_bytes,
+        &signer_cert,
+        &digest_alg_oid,
+    )?;
 
     Ok(signer_cert)
 }
@@ -608,6 +603,22 @@ fn validate_tsa_certificate_chain(
         return Ok(());
     }
 
+    println!("DEBUG: Validating TSA certificate chain");
+    println!(
+        "DEBUG: Signer Subject: {}",
+        signer_cert.tbs_certificate.subject
+    );
+    println!(
+        "DEBUG: Signer Issuer: {}",
+        signer_cert.tbs_certificate.issuer
+    );
+    println!("DEBUG: Number of roots: {}", opts.roots.len());
+    println!(
+        "DEBUG: Number of provided intermediates: {}",
+        opts.intermediates.len()
+    );
+    println!("DEBUG: Number of embedded certs: {}", embedded_certs.len());
+
     // Convert the signer certificate to DER format for webpki
     let signer_cert_der = signer_cert.to_der().map_err(|e| {
         Error::CertificateValidationError(format!(
@@ -645,6 +656,15 @@ fn validate_tsa_certificate_chain(
         if cert == signer_cert {
             continue;
         }
+
+        println!(
+            "DEBUG: Embedded Intermediate Subject: {}",
+            cert.tbs_certificate.subject
+        );
+        println!(
+            "DEBUG: Embedded Intermediate Issuer: {}",
+            cert.tbs_certificate.issuer
+        );
 
         let cert_der = cert.to_der().map_err(|e| {
             Error::CertificateValidationError(format!(
@@ -715,19 +735,6 @@ fn extract_signed_attrs_bytes(timestamp_der: &[u8]) -> Result<Vec<u8>> {
     let mut reader = SliceReader::new(timestamp_der).map_err(|e| {
         Error::SignatureVerificationError(format!("failed to create reader: {}", e))
     })?;
-
-    // TimeStampResp ::= SEQUENCE { status, timeStampToken OPTIONAL }
-    let _resp_header = x509_cert::der::Header::decode(&mut reader).map_err(|e| {
-        Error::SignatureVerificationError(format!("failed to decode response header: {}", e))
-    })?;
-
-    // Skip PKIStatusInfo (SEQUENCE)
-    let status_header = x509_cert::der::Header::decode(&mut reader).map_err(|e| {
-        Error::SignatureVerificationError(format!("failed to decode status header: {}", e))
-    })?;
-    reader
-        .read_slice(status_header.length)
-        .map_err(|e| Error::SignatureVerificationError(format!("failed to skip status: {}", e)))?;
 
     // ContentInfo (SignedData wrapper)
     let _content_info_header = x509_cert::der::Header::decode(&mut reader).map_err(|e| {

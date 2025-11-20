@@ -1,7 +1,10 @@
 //! Rekor client for transparency log operations
 
-use crate::entry::{DsseEntry, HashedRekord, LogEntry, LogEntryResponse, LogInfo, SearchIndex};
+use crate::entry::{
+    DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, LogInfo, SearchIndex,
+};
 use crate::error::{Error, Result};
+use base64::Engine;
 
 /// A client for interacting with Rekor
 pub struct RekorClient {
@@ -118,7 +121,7 @@ impl RekorClient {
         Ok(entry)
     }
 
-    /// Create a new log entry
+    /// Create a new log entry (V1)
     pub async fn create_entry(&self, entry: HashedRekord) -> Result<LogEntry> {
         let url = format!("{}/api/v1/log/entries", self.url);
         let response = self
@@ -150,6 +153,77 @@ impl RekorClient {
 
         entry.uuid = entry_uuid;
         Ok(entry)
+    }
+
+    /// Create a new log entry (V2)
+    pub async fn create_entry_v2(&self, entry: HashedRekordV2) -> Result<LogEntry> {
+        let url = format!("{}/api/v2/log/entries", self.url);
+        let response = self
+            .client
+            .post(&url)
+            .json(&entry)
+            .send()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Api(format!(
+                "failed to create entry: {} - {}",
+                status, body
+            )));
+        }
+
+        let response_text = response
+            .text()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+
+        let entry_v2: crate::entry::LogEntryV2 = serde_json::from_str(&response_text)
+            .map_err(|e| Error::Http(format!("failed to parse JSON: {}", e)))?;
+
+        // Convert V2 entry to LogEntry
+        let log_index = entry_v2.log_index.parse::<i64>().unwrap_or_default();
+        let integrated_time = entry_v2.integrated_time.parse::<i64>().unwrap_or_default();
+
+        let verification = Some(crate::entry::Verification {
+            inclusion_proof: entry_v2
+                .inclusion_proof
+                .map(|p| crate::entry::InclusionProof {
+                    checkpoint: p.checkpoint.envelope,
+                    hashes: p
+                        .hashes
+                        .iter()
+                        .map(|h| {
+                            // V2 returns Base64, convert to Hex for consistency with V1/LogEntry
+                            let bytes = base64::engine::general_purpose::STANDARD
+                                .decode(h)
+                                .unwrap_or_default();
+                            hex::encode(bytes)
+                        })
+                        .collect(),
+                    log_index: p.log_index.parse::<i64>().unwrap_or_default(),
+                    root_hash: {
+                        // V2 returns Base64, convert to Hex
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(&p.root_hash)
+                            .unwrap_or_default();
+                        hex::encode(bytes)
+                    },
+                    tree_size: p.tree_size.parse::<i64>().unwrap_or_default(),
+                }),
+            signed_entry_timestamp: entry_v2.inclusion_promise.map(|p| p.signed_entry_timestamp),
+        });
+
+        Ok(LogEntry {
+            uuid: "".to_string(), // V2 response doesn't include UUID in body
+            body: entry_v2.canonicalized_body,
+            integrated_time,
+            log_i_d: entry_v2.log_id.key_id,
+            log_index,
+            verification,
+        })
     }
 
     /// Create a new DSSE log entry

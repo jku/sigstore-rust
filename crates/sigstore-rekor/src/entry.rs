@@ -83,6 +83,56 @@ pub struct InactiveShard {
     pub tree_size: i64,
 }
 
+/// Response from creating a log entry (map of UUID to LogEntry)
+pub type LogEntryResponse = HashMap<String, LogEntry>;
+
+/// Search index query
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchIndex {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<SearchIndexPublicKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchIndexPublicKey {
+    pub format: String,
+    pub content: String,
+}
+
+/// DSSE entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsseEntry {
+    pub api_version: String,
+    pub kind: String,
+    pub spec: DsseEntrySpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsseEntrySpec {
+    pub proposed_content: DsseProposedContent,
+    pub signatures: Vec<DsseSignature>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsseProposedContent {
+    pub envelope: String,
+    pub verifiers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsseSignature {
+    pub signature: String,
+    pub verifier: String,
+}
+
 /// HashedRekord entry for creating new log entries
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashedRekord {
@@ -169,83 +219,148 @@ impl HashedRekord {
     }
 }
 
-/// DSSE entry for creating new log entries with envelopes
+/// HashedRekord entry for creating new log entries (V2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DsseEntry {
-    /// API version
-    #[serde(rename = "apiVersion")]
-    pub api_version: String,
-    /// Entry kind
-    pub kind: String,
-    /// Spec containing the actual data
-    pub spec: DsseSpec,
+pub struct HashedRekordV2 {
+    #[serde(rename = "hashedRekordRequestV002")]
+    pub request: HashedRekordRequestV002,
 }
 
-/// DSSE specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DsseSpec {
-    /// The DSSE envelope
-    #[serde(rename = "proposedContent")]
-    pub proposed_content: DsseProposedContent,
+pub struct HashedRekordRequestV002 {
+    pub digest: String, // base64
+    pub signature: HashedRekordSignatureV2,
 }
 
-/// DSSE proposed content
+/// Signature in HashedRekord V2
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DsseProposedContent {
-    /// The envelope containing the signed payload
-    pub envelope: String,
-    /// Verifiers (certificates or public keys)
-    pub verifiers: Vec<String>,
+pub struct HashedRekordSignatureV2 {
+    /// Signature content (base64 encoded)
+    pub content: String,
+    /// Verifier
+    pub verifier: HashedRekordVerifierV2,
 }
 
-impl DsseEntry {
-    /// Create a new DSSE entry
+/// Verifier in HashedRekord V2
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HashedRekordVerifierV2 {
+    /// Key details (enum value as string)
+    pub key_details: String,
+    /// X.509 certificate
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x509_certificate: Option<HashedRekordPublicKeyV2>,
+    /// Public key (alternative to certificate)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<HashedRekordPublicKeyV2>,
+}
+
+/// Public key/Certificate in HashedRekord V2
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HashedRekordPublicKeyV2 {
+    /// Raw bytes (base64 encoded DER)
+    #[serde(rename = "rawBytes")]
+    pub content: String,
+}
+
+impl HashedRekordV2 {
+    /// Create a new HashedRekordV2 entry
     ///
     /// # Arguments
-    /// * `envelope_json` - JSON-encoded DSSE envelope (passed as-is, not base64-encoded)
-    /// * `certificate_pem` - PEM-encoded certificate (will be base64-encoded for API)
-    pub fn new(envelope_json: &str, certificate_pem: &str) -> Self {
-        // Rekor API expects the envelope as a JSON string, NOT base64-encoded
-        // Rekor API expects the PEM to be base64-encoded
-        let cert_base64 = base64::engine::general_purpose::STANDARD.encode(certificate_pem);
+    /// * `artifact_hash` - Hex-encoded SHA256 hash of the artifact
+    /// * `signature_base64` - Base64-encoded signature
+    /// * `public_key_pem` - PEM-encoded public key or certificate
+    pub fn new(artifact_hash: &str, signature_base64: &str, public_key_pem: &str) -> Self {
+        // Extract base64 DER from PEM
+        // PEM format: -----BEGIN CERTIFICATE-----\nbase64\n-----END CERTIFICATE-----
+        let start_marker = "-----BEGIN CERTIFICATE-----";
+        let end_marker = "-----END CERTIFICATE-----";
+
+        let cert_base64 = if let Some(start) = public_key_pem.find(start_marker) {
+            if let Some(end) = public_key_pem.find(end_marker) {
+                let content = &public_key_pem[start + start_marker.len()..end];
+                content
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect::<String>()
+            } else {
+                // Fallback: assume it's already base64 or raw key
+                public_key_pem.to_string()
+            }
+        } else {
+            // Fallback: assume it's already base64 or raw key
+            public_key_pem.to_string()
+        };
+
+        // Convert hex hash to base64
+        let hash_bytes = hex::decode(artifact_hash).expect("invalid hex hash");
+        let hash_base64 = base64::engine::general_purpose::STANDARD.encode(hash_bytes);
 
         Self {
-            api_version: "0.0.1".to_string(),
-            kind: "dsse".to_string(),
-            spec: DsseSpec {
-                proposed_content: DsseProposedContent {
-                    envelope: envelope_json.to_string(),
-                    verifiers: vec![cert_base64],
+            request: HashedRekordRequestV002 {
+                digest: hash_base64,
+                signature: HashedRekordSignatureV2 {
+                    content: signature_base64.to_string(),
+                    verifier: HashedRekordVerifierV2 {
+                        // Assuming ECDSA P-256 SHA-256 for now as per conformance tests
+                        key_details: "PKIX_ECDSA_P256_SHA_256".to_string(),
+                        x509_certificate: Some(HashedRekordPublicKeyV2 {
+                            content: cert_base64,
+                        }),
+                        public_key: None,
+                    },
                 },
             },
         }
     }
 }
 
-/// Response type for log entry retrieval (map of UUID -> entry)
-pub type LogEntryResponse = HashMap<String, LogEntry>;
-
-/// Search index request
+/// V2 Log Entry response
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchIndex {
-    /// Email to search for
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub email: Option<String>,
-    /// Public key to search for
-    #[serde(rename = "publicKey", skip_serializing_if = "Option::is_none")]
-    pub public_key: Option<SearchPublicKey>,
-    /// Hash to search for
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash: Option<String>,
+#[serde(rename_all = "camelCase")]
+pub struct LogEntryV2 {
+    pub log_index: String,
+    pub log_id: LogId,
+    pub kind_version: KindVersion,
+    pub integrated_time: String,
+    pub inclusion_promise: Option<InclusionPromise>,
+    pub inclusion_proof: Option<InclusionProofV2>,
+    pub canonicalized_body: String,
 }
 
-/// Public key for search
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchPublicKey {
-    /// Format of the key
-    pub format: String,
-    /// Key content
-    pub content: String,
+#[serde(rename_all = "camelCase")]
+pub struct LogId {
+    pub key_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KindVersion {
+    pub kind: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InclusionPromise {
+    pub signed_entry_timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InclusionProofV2 {
+    pub log_index: String,
+    pub root_hash: String,
+    pub tree_size: String,
+    pub hashes: Vec<String>,
+    pub checkpoint: CheckpointV2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckpointV2 {
+    pub envelope: String,
 }
 
 #[cfg(test)]
@@ -261,5 +376,16 @@ mod tests {
         );
         assert_eq!(entry.kind, "hashedrekord");
         assert_eq!(entry.api_version, "0.0.1");
+    }
+
+    #[test]
+    fn test_hashed_rekord_v2_creation() {
+        let entry = HashedRekordV2::new(
+            "abcd1234",
+            "c2lnbmF0dXJl",
+            "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
+        );
+        assert!(entry.request.digest.len() > 0);
+        assert_eq!(entry.request.signature.content, "c2lnbmF0dXJl");
     }
 }

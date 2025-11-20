@@ -8,5 +8,5 @@ pub mod entry;
 pub mod error;
 
 pub use client::{get_public_log_info, RekorClient};
-pub use entry::{DsseEntry, HashedRekord, LogEntry, LogInfo, SearchIndex};
+pub use entry::{DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogInfo, SearchIndex};
 pub use error::{Error, Result};

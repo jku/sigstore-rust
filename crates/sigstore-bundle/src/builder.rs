@@ -3,7 +3,8 @@
 use sigstore_types::{
     bundle::{
         CheckpointData, InclusionPromise, InclusionProof, KindVersion, LogId, MessageSignature,
-        SignatureContent, TransparencyLogEntry, VerificationMaterial, VerificationMaterialContent,
+        Rfc3161Timestamp, SignatureContent, TimestampVerificationData, TransparencyLogEntry,
+        VerificationMaterial, VerificationMaterialContent,
     },
     Bundle, DsseEnvelope, MediaType,
 };
@@ -16,6 +17,8 @@ pub struct BundleBuilder {
     verification_content: Option<VerificationMaterialContent>,
     /// Transparency log entries
     tlog_entries: Vec<TransparencyLogEntry>,
+    /// RFC 3161 timestamps
+    rfc3161_timestamps: Vec<Rfc3161Timestamp>,
     /// Signature content
     signature_content: Option<SignatureContent>,
 }
@@ -27,6 +30,7 @@ impl BundleBuilder {
             version: MediaType::Bundle0_3,
             verification_content: None,
             tlog_entries: Vec::new(),
+            rfc3161_timestamps: Vec::new(),
             signature_content: None,
         }
     }
@@ -47,6 +51,17 @@ impl BundleBuilder {
         self
     }
 
+    /// Set the certificate chain (base64-encoded DER)
+    pub fn certificate_chain(mut self, certs_b64: Vec<String>) -> Self {
+        self.verification_content = Some(VerificationMaterialContent::X509CertificateChain {
+            certificates: certs_b64
+                .into_iter()
+                .map(|c| sigstore_types::bundle::X509Certificate { raw_bytes: c })
+                .collect(),
+        });
+        self
+    }
+
     /// Set the public key hint
     pub fn public_key(mut self, hint: String) -> Self {
         self.verification_content = Some(VerificationMaterialContent::PublicKey { hint });
@@ -56,6 +71,13 @@ impl BundleBuilder {
     /// Add a transparency log entry
     pub fn add_tlog_entry(mut self, entry: TransparencyLogEntry) -> Self {
         self.tlog_entries.push(entry);
+        self
+    }
+
+    /// Add an RFC 3161 timestamp (base64 encoded)
+    pub fn add_rfc3161_timestamp(mut self, signed_timestamp: String) -> Self {
+        self.rfc3161_timestamps
+            .push(Rfc3161Timestamp { signed_timestamp });
         self
     }
 
@@ -87,7 +109,9 @@ impl BundleBuilder {
             verification_material: VerificationMaterial {
                 content: verification_content,
                 tlog_entries: self.tlog_entries,
-                timestamp_verification_data: Default::default(),
+                timestamp_verification_data: TimestampVerificationData {
+                    rfc3161_timestamps: self.rfc3161_timestamps,
+                },
             },
             content: signature_content,
         })
