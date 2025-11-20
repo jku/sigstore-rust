@@ -56,7 +56,9 @@ impl BundleBuilder {
         self.verification_content = Some(VerificationMaterialContent::X509CertificateChain {
             certificates: certs_b64
                 .into_iter()
-                .map(|c| sigstore_types::bundle::X509Certificate { raw_bytes: c.into() })
+                .map(|c| sigstore_types::bundle::X509Certificate {
+                    raw_bytes: c.into(),
+                })
                 .collect(),
         });
         self
@@ -200,7 +202,7 @@ impl TlogEntryBuilder {
         checkpoint: String,
     ) -> Self {
         self.inclusion_proof = Some(InclusionProof {
-            log_index: log_index.to_string(),
+            log_index: log_index.to_string().into(),
             root_hash,
             tree_size: tree_size.to_string(),
             hashes,
@@ -214,9 +216,9 @@ impl TlogEntryBuilder {
     /// Build the transparency log entry
     pub fn build(self) -> TransparencyLogEntry {
         TransparencyLogEntry {
-            log_index: self.log_index.to_string(),
+            log_index: self.log_index.to_string().into(),
             log_id: LogId {
-                key_id: self.log_id,
+                key_id: self.log_id.into(),
             },
             kind_version: KindVersion {
                 kind: self.kind,

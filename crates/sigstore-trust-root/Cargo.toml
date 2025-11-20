@@ -8,6 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# Internal dependencies
+sigstore-types = { path = "../sigstore-types" }
+
 # Error handling
 thiserror = { workspace = true }
 

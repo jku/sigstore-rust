@@ -175,12 +175,12 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
         .map_err(|_| Error::Verification("Invalid integrated time".into()))?;
     let log_index = entry
         .log_index
-        .parse::<i64>()
-        .map_err(|_| Error::Verification("Invalid log index".into()))?;
+        .as_u64()
+        .map_err(|_| Error::Verification("Invalid log index".into()))? as i64;
 
     // Log ID for payload must be hex encoded
     let log_id_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&entry.log_id.key_id)
+        .decode(entry.log_id.key_id.as_str())
         .map_err(|_| Error::Verification("Invalid base64 log ID".into()))?;
     let log_id_hex = hex::encode(log_id_bytes);
 

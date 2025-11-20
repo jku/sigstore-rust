@@ -3,7 +3,7 @@
 //! DSSE is a signature envelope format used for signing arbitrary payloads.
 //! Specification: https://github.com/secure-systems-lab/dsse
 
-use crate::encoding::{Base64Payload, Base64Signature};
+use crate::encoding::{Base64Payload, Base64Signature, KeyId};
 use serde::{Deserialize, Serialize};
 
 /// A DSSE envelope containing a signed payload
@@ -23,15 +23,19 @@ pub struct DsseEnvelope {
 #[serde(rename_all = "camelCase")]
 pub struct DsseSignature {
     /// Key ID (optional hint for key lookup)
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub keyid: String,
+    #[serde(default, skip_serializing_if = "KeyId::is_empty")]
+    pub keyid: KeyId,
     /// Base64-encoded signature
     pub sig: Base64Signature,
 }
 
 impl DsseEnvelope {
     /// Create a new DSSE envelope
-    pub fn new(payload_type: String, payload: Base64Payload, signatures: Vec<DsseSignature>) -> Self {
+    pub fn new(
+        payload_type: String,
+        payload: Base64Payload,
+        signatures: Vec<DsseSignature>,
+    ) -> Self {
         Self {
             payload_type,
             payload,
@@ -97,9 +101,11 @@ mod tests {
     fn test_dsse_envelope_serde() {
         let envelope = DsseEnvelope {
             payload_type: "application/vnd.in-toto+json".to_string(),
-            payload: "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEifQ==".to_string().into(),
+            payload: "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEifQ=="
+                .to_string()
+                .into(),
             signatures: vec![DsseSignature {
-                keyid: "".to_string(),
+                keyid: "".to_string().into(),
                 sig: "MEQCIHjhpw==".to_string().into(),
             }],
         };

@@ -47,7 +47,7 @@ fn verify_hashedrekord_entry(
     match &body {
         RekorEntryBody::HashedRekordV001(rekord) => {
             // v0.0.1: spec.data.hash.value (hex-encoded)
-            let expected = Sha256Hash::from_hex(rekord.spec.data.hash.value.as_str())
+            let expected = Sha256Hash::from_hex(&rekord.spec.data.hash.value)
                 .map_err(|e| Error::Verification(format!("invalid hash in Rekor entry: {}", e)))?;
             validate_artifact_hash(&artifact_hash_to_check, &expected)?;
         }

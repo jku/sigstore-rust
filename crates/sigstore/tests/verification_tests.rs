@@ -5,6 +5,7 @@
 use sigstore::bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
 use sigstore::types::Bundle;
 use sigstore::verify::{verify, VerificationPolicy, Verifier};
+use sigstore_types::LogIndex;
 
 /// Real v0.3 bundle from sigstore-python tests
 const V03_BUNDLE: &str = include_str!("../../sigstore-bundle/tests/fixtures/bundle_v3.json");
@@ -206,7 +207,7 @@ fn test_full_verification_flow() {
     // Extract tlog entry info
     let entry = &bundle.verification_material.tlog_entries[0];
     assert_eq!(entry.kind_version.kind, "dsse");
-    assert_eq!(entry.log_index, "166143216");
+    assert_eq!(entry.log_index, LogIndex::new("166143216".to_string()));
 
     // Verify inclusion proof
     let proof = entry.inclusion_proof.as_ref().expect("Should have proof");

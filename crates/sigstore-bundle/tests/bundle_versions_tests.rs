@@ -137,7 +137,7 @@ fn test_parse_v03_bundle() {
     match &bundle.verification_material.content {
         sigstore_types::bundle::VerificationMaterialContent::Certificate(cert) => {
             assert!(
-                !cert.raw_bytes.is_empty(),
+                !cert.raw_bytes.as_str().is_empty(),
                 "Certificate should not be empty"
             );
         }

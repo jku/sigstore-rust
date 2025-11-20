@@ -1418,6 +1418,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "sigstore-types",
  "thiserror",
  "x509-cert",
 ]

@@ -3,7 +3,7 @@
 //! These tests use real bundle fixtures from the sigstore-python project.
 
 use sigstore_bundle::{validate_bundle, validate_bundle_with_options, ValidationOptions};
-use sigstore_types::{Bundle, MediaType};
+use sigstore_types::{Bundle, LogIndex, MediaType};
 
 /// Test bundle JSON from sigstore-python/test/assets/bundle_v3.txt.sigstore
 const BUNDLE_V3_JSON: &str = r#"{
@@ -73,7 +73,7 @@ fn test_parse_v3_bundle() {
     // Check tlog entries
     assert_eq!(bundle.verification_material.tlog_entries.len(), 1);
     let entry = &bundle.verification_material.tlog_entries[0];
-    assert_eq!(entry.log_index, "25915956");
+    assert_eq!(entry.log_index, LogIndex::new("25915956".to_string()));
     assert_eq!(entry.integrated_time, "1712085549");
     assert_eq!(entry.kind_version.kind, "hashedrekord");
     assert_eq!(entry.kind_version.version, "0.0.1");
@@ -84,7 +84,7 @@ fn test_parse_v3_bundle() {
 
     // Check inclusion proof details
     let proof = entry.inclusion_proof.as_ref().unwrap();
-    assert_eq!(proof.log_index, "25901137");
+    assert_eq!(proof.log_index, LogIndex::new("25901137".to_string()));
     assert_eq!(proof.tree_size, "25901138");
     assert_eq!(proof.hashes.len(), 11);
 }
@@ -136,7 +136,7 @@ fn test_v3_bundle_message_signature() {
     match &bundle.content {
         sigstore_types::bundle::SignatureContent::MessageSignature(sig) => {
             // Check signature is present
-            assert!(!sig.signature.is_empty());
+            assert!(!sig.signature.as_str().is_empty());
 
             // Check message digest
             let digest = sig.message_digest.as_ref().unwrap();
@@ -144,7 +144,7 @@ fn test_v3_bundle_message_signature() {
                 digest.algorithm,
                 sigstore_types::hash::HashAlgorithm::Sha2256
             );
-            assert!(!digest.digest.is_empty());
+            assert!(!digest.digest.as_str().is_empty());
         }
         sigstore_types::bundle::SignatureContent::DsseEnvelope(_) => {
             panic!("Expected MessageSignature, got DsseEnvelope");
@@ -239,7 +239,7 @@ fn test_inclusion_proof_verification() {
     root_hash.copy_from_slice(&root_bytes);
 
     // Verify the inclusion proof
-    let leaf_index: u64 = proof.log_index.parse().unwrap();
+    let leaf_index: u64 = proof.log_index.as_u64().unwrap();
     let tree_size: u64 = proof.tree_size.parse().unwrap();
 
     let result =

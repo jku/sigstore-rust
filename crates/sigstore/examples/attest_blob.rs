@@ -6,6 +6,7 @@ use sigstore::fulcio::FulcioClient;
 use sigstore::oidc::get_identity_token;
 use sigstore::rekor::{DsseEntry, RekorClient};
 use sigstore::types::{DsseEnvelope, DsseSignature, MediaType};
+use sigstore_types::{Base64Payload, Base64Signature, KeyId};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -160,10 +161,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create DSSE envelope
     let dsse_envelope = DsseEnvelope::new(
         payload_type.to_string(),
-        payload_b64,
+        Base64Payload::new(payload_b64),
         vec![DsseSignature {
-            keyid: String::new(),
-            sig: signature_b64.clone(),
+            keyid: KeyId::default(),
+            sig: Base64Signature::new(signature_b64.clone()),
         }],
     );
 

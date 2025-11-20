@@ -238,7 +238,7 @@ pub struct TransparencyLogEntry {
 #[serde(rename_all = "camelCase")]
 pub struct LogId {
     /// Key ID (base64 encoded SHA-256 of public key)
-    pub key_id: String,
+    pub key_id: LogKeyId,
 }
 
 /// Entry kind and version
@@ -264,7 +264,7 @@ pub struct InclusionPromise {
 #[serde(rename_all = "camelCase")]
 pub struct InclusionProof {
     /// Index of the entry in the log
-    pub log_index: String,
+    pub log_index: LogIndex,
     /// Root hash of the tree (base64 encoded)
     pub root_hash: String,
     /// Tree size at time of proof

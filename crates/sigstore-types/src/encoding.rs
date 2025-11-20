@@ -265,9 +265,9 @@ impl LogIndex {
 
     /// Parse as u64
     pub fn as_u64(&self) -> Result<u64> {
-        self.0.parse().map_err(|e| {
-            Error::InvalidEncoding(format!("invalid log index '{}': {}", self.0, e))
-        })
+        self.0
+            .parse()
+            .map_err(|e| Error::InvalidEncoding(format!("invalid log index '{}': {}", self.0, e)))
     }
 }
 
@@ -373,6 +373,12 @@ impl From<String> for KeyId {
     }
 }
 
+impl Default for KeyId {
+    fn default() -> Self {
+        KeyId::new(String::new())
+    }
+}
+
 impl AsRef<str> for KeyId {
     fn as_ref(&self) -> &str {
         &self.0
@@ -412,9 +418,9 @@ impl Sha256Hash {
     }
 
     /// Parse from hex-encoded string
-    pub fn from_hex(s: &str) -> Result<Self> {
-        let bytes =
-            hex::decode(s).map_err(|e| Error::InvalidEncoding(format!("invalid hex: {}", e)))?;
+    pub fn from_hex(hex: &Hex) -> Result<Self> {
+        let bytes = hex::decode(hex.as_str())
+            .map_err(|e| Error::InvalidEncoding(format!("invalid hex: {}", e)))?;
         Self::try_from_slice(&bytes)
     }
 
@@ -485,7 +491,7 @@ mod tests {
     #[test]
     fn test_base64_roundtrip() {
         let data = b"hello world";
-        let encoded = Base64::encode(data);
+        let encoded = Base64::<()>::encode(data);
         let decoded = encoded.decode().unwrap();
         assert_eq!(&decoded, data);
     }
@@ -501,7 +507,7 @@ mod tests {
     #[test]
     fn test_sha256_hex() {
         let hash_hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let hash = Sha256Hash::from_hex(hash_hex).unwrap();
+        let hash = Sha256Hash::from_hex(&Hex(hash_hex.to_string())).unwrap();
         assert_eq!(hash.to_hex(), hash_hex);
     }
 
@@ -521,7 +527,7 @@ mod tests {
     #[test]
     fn test_sha256_conversion() {
         let hash_hex = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let from_hex = Sha256Hash::from_hex(hash_hex).unwrap();
+        let from_hex = Sha256Hash::from_hex(&Hex(hash_hex.to_string())).unwrap();
         let from_base64 = Sha256Hash::from_base64(&from_hex.to_base64()).unwrap();
         assert_eq!(from_hex, from_base64);
     }

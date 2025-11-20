@@ -166,7 +166,7 @@ fn validate_inclusion_proofs(bundle: &Bundle) -> Result<()> {
             // Parse indices
             let leaf_index: u64 = proof
                 .log_index
-                .parse()
+                .as_u64()
                 .map_err(|_| Error::Validation("invalid log_index in proof".to_string()))?;
             let tree_size: u64 = proof
                 .tree_size

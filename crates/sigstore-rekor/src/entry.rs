@@ -133,6 +133,32 @@ pub struct DsseSignature {
     pub verifier: String,
 }
 
+impl DsseEntry {
+    /// Create a new DSSE entry
+    ///
+    /// # Arguments
+    /// * `envelope_json` - JSON-encoded DSSE envelope (passed as-is, not base64-encoded)
+    /// * `certificate_pem` - PEM-encoded certificate (will be base64-encoded for API)
+    pub fn new(envelope_json: &str, certificate_pem: &str) -> Self {
+        use base64::Engine;
+        // Rekor API expects the envelope as a JSON string, NOT base64-encoded
+        // Rekor API expects the PEM to be base64-encoded
+        let cert_base64 = base64::engine::general_purpose::STANDARD.encode(certificate_pem);
+
+        Self {
+            api_version: "0.0.1".to_string(),
+            kind: "dsse".to_string(),
+            spec: DsseEntrySpec {
+                proposed_content: DsseProposedContent {
+                    envelope: envelope_json.to_string(),
+                    verifiers: vec![cert_base64],
+                },
+                signatures: vec![],
+            },
+        }
+    }
+}
+
 /// HashedRekord entry for creating new log entries
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashedRekord {

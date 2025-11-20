@@ -5,6 +5,7 @@ use base64::Engine;
 use chrono::{DateTime, Utc};
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
+use sigstore_types::LogKeyId;
 use std::collections::HashMap;
 
 /// TSA certificate with optional validity period (start, end)
@@ -130,7 +131,7 @@ pub struct PublicKey {
 #[serde(rename_all = "camelCase")]
 pub struct LogId {
     /// Key ID (base64 encoded)
-    pub key_id: String,
+    pub key_id: LogKeyId,
 }
 
 /// Subject information for a certificate
@@ -207,7 +208,7 @@ impl TrustedRoot {
         for tlog in &self.tlogs {
             let key_bytes =
                 base64::engine::general_purpose::STANDARD.decode(&tlog.public_key.raw_bytes)?;
-            keys.insert(tlog.log_id.key_id.clone(), key_bytes);
+            keys.insert(tlog.log_id.key_id.to_string(), key_bytes);
         }
         Ok(keys)
     }
@@ -224,7 +225,7 @@ impl TrustedRoot {
 
             // Decode the key_id to get the key hint (first 4 bytes)
             let key_id_bytes =
-                base64::engine::general_purpose::STANDARD.decode(&tlog.log_id.key_id)?;
+                base64::engine::general_purpose::STANDARD.decode(tlog.log_id.key_id.as_str())?;
 
             if key_id_bytes.len() >= 4 {
                 let key_hint: [u8; 4] = [
@@ -240,9 +241,9 @@ impl TrustedRoot {
     }
 
     /// Get a specific Rekor public key by log ID
-    pub fn rekor_key_for_log(&self, log_id: &str) -> Result<Vec<u8>> {
+    pub fn rekor_key_for_log(&self, log_id: &LogKeyId) -> Result<Vec<u8>> {
         for tlog in &self.tlogs {
-            if tlog.log_id.key_id == log_id {
+            if &tlog.log_id.key_id == log_id {
                 return Ok(
                     base64::engine::general_purpose::STANDARD.decode(&tlog.public_key.raw_bytes)?
                 );
@@ -252,7 +253,7 @@ impl TrustedRoot {
     }
 
     /// Get all Certificate Transparency log public keys mapped by key ID
-    pub fn ctfe_keys(&self) -> Result<HashMap<String, Vec<u8>>> {
+    pub fn ctfe_keys(&self) -> Result<HashMap<LogKeyId, Vec<u8>>> {
         let mut keys = HashMap::new();
         for ctlog in &self.ctlogs {
             let key_bytes =
@@ -342,8 +343,8 @@ impl TrustedRoot {
     }
 
     /// Check if a Rekor key ID exists in the trusted root
-    pub fn has_rekor_key(&self, key_id: &str) -> bool {
-        self.tlogs.iter().any(|tlog| tlog.log_id.key_id == key_id)
+    pub fn has_rekor_key(&self, key_id: &LogKeyId) -> bool {
+        self.tlogs.iter().any(|tlog| &tlog.log_id.key_id == key_id)
     }
 
     /// Get the validity period for a TSA at a given time
@@ -418,7 +419,10 @@ mod tests {
     fn test_parse_trusted_root() {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
         assert_eq!(root.tlogs.len(), 1);
-        assert_eq!(root.tlogs[0].log_id.key_id, "test-key-id");
+        assert_eq!(
+            root.tlogs[0].log_id.key_id,
+            LogKeyId::new("test-key-id".to_string())
+        );
     }
 
     #[test]
@@ -432,7 +436,7 @@ mod tests {
     #[test]
     fn test_has_rekor_key() {
         let root = TrustedRoot::from_json(SAMPLE_TRUSTED_ROOT).unwrap();
-        assert!(root.has_rekor_key("test-key-id"));
-        assert!(!root.has_rekor_key("non-existent"));
+        assert!(root.has_rekor_key(&LogKeyId::new("test-key-id".to_string())));
+        assert!(!root.has_rekor_key(&LogKeyId::new("non-existent".to_string())));
     }
 }
