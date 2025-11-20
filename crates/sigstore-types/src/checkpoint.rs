@@ -89,10 +89,12 @@ impl Checkpoint {
                 // This is a signature line
                 // Format: — <origin> <key_id_base64><signature_base64>
                 // Note: key_id is first 4 bytes (encoded), signature follows directly
-                let content = if line.starts_with("— ") {
-                    &line["— ".len()..]
+                let content = if let Some(stripped) = line.strip_prefix("— ") {
+                    stripped
+                } else if let Some(stripped) = line.strip_prefix("\u{2014} ") {
+                    stripped
                 } else {
-                    &line["\u{2014} ".len()..]
+                    unreachable!("line must start with one of the prefixes")
                 };
 
                 // Split into origin and key_id+signature

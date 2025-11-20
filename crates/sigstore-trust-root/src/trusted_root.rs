@@ -7,6 +7,13 @@ use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// TSA certificate with optional validity period (start, end)
+pub type TsaCertWithValidity = (
+    CertificateDer<'static>,
+    Option<DateTime<Utc>>,
+    Option<DateTime<Utc>>,
+);
+
 /// A trusted root bundle containing all trust anchors
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -256,15 +263,7 @@ impl TrustedRoot {
     }
 
     /// Get all TSA certificates with their validity periods
-    pub fn tsa_certs_with_validity(
-        &self,
-    ) -> Result<
-        Vec<(
-            CertificateDer<'static>,
-            Option<DateTime<Utc>>,
-            Option<DateTime<Utc>>,
-        )>,
-    > {
+    pub fn tsa_certs_with_validity(&self) -> Result<Vec<TsaCertWithValidity>> {
         let mut result = Vec::new();
 
         for tsa in &self.timestamp_authorities {

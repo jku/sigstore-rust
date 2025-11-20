@@ -9,6 +9,7 @@ use crate::dsse::DsseEnvelope;
 use crate::error::{Error, Result};
 use crate::hash::HashAlgorithm;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// Sigstore bundle media types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,9 +31,12 @@ impl MediaType {
             MediaType::Bundle0_3 => "application/vnd.dev.sigstore.bundle.v0.3+json",
         }
     }
+}
 
-    /// Parse a media type string
-    pub fn from_str(s: &str) -> Result<Self> {
+impl FromStr for MediaType {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "application/vnd.dev.sigstore.bundle+json;version=0.1" => Ok(MediaType::Bundle0_1),
             "application/vnd.dev.sigstore.bundle+json;version=0.2" => Ok(MediaType::Bundle0_2),
