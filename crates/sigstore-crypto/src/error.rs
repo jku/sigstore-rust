@@ -44,6 +44,10 @@ pub enum Error {
     /// Checkpoint parsing/verification error
     #[error("Checkpoint error: {0}")]
     Checkpoint(String),
+
+    /// Certificate parsing/validation error
+    #[error("Certificate error: {0}")]
+    InvalidCertificate(String),
 }
 
 impl From<aws_lc_rs::error::Unspecified> for Error {

@@ -8,8 +8,10 @@ use serde::Serialize;
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::{verify_signature, Keyring, SignedNote, SigningScheme};
+use sigstore_crypto::{parse_certificate_info, x509};
+use sigstore_rekor::body::RekorEntryBody;
 use sigstore_trust_root::TrustedRoot;
-use sigstore_tsa::{verify_timestamp_response, VerifyOpts as TsaVerifyOpts};
+use sigstore_tsa::{parse_timestamp, verify_timestamp_response, VerifyOpts as TsaVerifyOpts};
 use sigstore_types::bundle::{InclusionProof, VerificationMaterialContent};
 use sigstore_types::{Bundle, SignatureContent, TransparencyLogEntry};
 use x509_cert::der::Decode;
@@ -214,16 +216,17 @@ impl Verifier {
             }
         };
 
-        // Parse the X.509 certificate
-        let cert = Certificate::from_der(&cert_der)
+        // Parse the X.509 certificate using our utility
+        let cert_info = parse_certificate_info(&cert_der)
             .map_err(|e| Error::Verification(format!("failed to parse certificate: {}", e)))?;
 
-        // Check certificate validity period
-        let validity = &cert.tbs_certificate.validity;
+        let not_before = cert_info.not_before;
+        let not_after = cert_info.not_after;
+        let public_key_bytes = &cert_info.public_key_bytes;
+        let scheme = cert_info.signing_scheme;
 
-        // Convert validity times to Unix timestamps
-        let not_before = validity.not_before.to_unix_duration().as_secs() as i64;
-        let not_after = validity.not_after.to_unix_duration().as_secs() as i64;
+        // Store identity in result
+        result.identity = cert_info.identity;
 
         // Extract signature bytes early - needed for TSA timestamp verification
         let signature_bytes_for_tsa = match &bundle.content {
@@ -278,47 +281,6 @@ impl Verifier {
                 "certificate has expired: validation time {} is after not_after {}",
                 validation_time, not_after
             )));
-        }
-
-        // Extract public key bytes from the certificate
-        let public_key_info = &cert.tbs_certificate.subject_public_key_info;
-        let public_key_bytes = public_key_info.subject_public_key.raw_bytes();
-
-        // Determine signing scheme from the certificate's algorithm
-        let scheme = match public_key_info.algorithm.oid.to_string().as_str() {
-            // id-ecPublicKey
-            "1.2.840.10045.2.1" => SigningScheme::EcdsaP256Sha256,
-            // id-Ed25519
-            "1.3.101.112" => SigningScheme::Ed25519,
-            oid => {
-                return Err(Error::Verification(format!(
-                    "unsupported key algorithm: {}",
-                    oid
-                )));
-            }
-        };
-
-        // Extract identity from certificate (SAN email or URI)
-        if let Some(extensions) = &cert.tbs_certificate.extensions {
-            for ext in extensions.iter() {
-                // Subject Alternative Name OID: 2.5.29.17
-                if ext.extn_id.to_string() == "2.5.29.17" {
-                    // Parse SAN extension to extract email
-                    // In ASN.1, 0x81 is the tag for rfc822Name (email)
-                    let san_bytes = ext.extn_value.as_bytes();
-                    if let Some(email_start) = san_bytes.iter().position(|&b| b == 0x81) {
-                        let remaining = &san_bytes[email_start + 1..];
-                        if !remaining.is_empty() {
-                            let len = remaining[0] as usize;
-                            if remaining.len() > len {
-                                if let Ok(email) = String::from_utf8(remaining[1..=len].to_vec()) {
-                                    result.identity = Some(email);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         // 3. Extract signature and data to verify based on content type
@@ -386,42 +348,22 @@ impl Verifier {
                     // Only validate envelope hash for v0.0.1 (Rekor v1)
                     // v0.0.2 (Rekor v2) doesn't include envelopeHash
                     if entry.kind_version.version == "0.0.1" {
-                        // Decode and parse canonicalized body
-                        let body_bytes = base64::engine::general_purpose::STANDARD
-                            .decode(&entry.canonicalized_body)
-                            .map_err(|e| {
-                                Error::Verification(format!(
-                                    "failed to decode canonicalized body: {}",
-                                    e
+                        // Parse the Rekor entry body using typed structures
+                        let body = RekorEntryBody::from_base64_json(
+                            &entry.canonicalized_body,
+                            &entry.kind_version.kind,
+                            &entry.kind_version.version,
+                        )
+                        .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
+
+                        let expected_hash = match &body {
+                            RekorEntryBody::DsseV001(dsse_body) => &dsse_body.spec.envelope_hash.value,
+                            _ => {
+                                return Err(Error::Verification(
+                                    "expected DSSE v0.0.1 body, got different type".to_string(),
                                 ))
-                            })?;
-
-                        let body_str = String::from_utf8(body_bytes).map_err(|e| {
-                            Error::Verification(format!(
-                                "canonicalized body is not valid UTF-8: {}",
-                                e
-                            ))
-                        })?;
-
-                        let body: serde_json::Value =
-                            serde_json::from_str(&body_str).map_err(|e| {
-                                Error::Verification(format!(
-                                    "failed to parse canonicalized body: {}",
-                                    e
-                                ))
-                            })?;
-
-                        // Extract expected envelope hash from Rekor entry (v0.0.1 format)
-                        let expected_hash = body
-                            .get("spec")
-                            .and_then(|s| s.get("envelopeHash"))
-                            .and_then(|h| h.get("value"))
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                Error::Verification(
-                                    "no envelope hash in Rekor v0.0.1 entry".to_string(),
-                                )
-                            })?;
+                            }
+                        };
 
                         // Compute actual envelope hash using canonical JSON (RFC 8785)
                         let envelope_json =
@@ -435,7 +377,7 @@ impl Verifier {
                         let envelope_hash_hex = hex::encode(envelope_hash);
 
                         // Compare hashes
-                        if envelope_hash_hex != expected_hash {
+                        if &envelope_hash_hex != expected_hash {
                             return Err(Error::Verification(format!(
                                 "DSSE envelope hash mismatch: computed {}, expected {}",
                                 envelope_hash_hex, expected_hash
@@ -443,42 +385,24 @@ impl Verifier {
                         }
                     } else if entry.kind_version.version == "0.0.2" {
                         // For Rekor v2 (v0.0.2), validate payload hash
-                        let body_bytes = base64::engine::general_purpose::STANDARD
-                            .decode(&entry.canonicalized_body)
-                            .map_err(|e| {
-                                Error::Verification(format!(
-                                    "failed to decode canonicalized body: {}",
-                                    e
+                        let body = RekorEntryBody::from_base64_json(
+                            &entry.canonicalized_body,
+                            &entry.kind_version.kind,
+                            &entry.kind_version.version,
+                        )
+                        .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
+
+                        let (expected_hash, rekor_signatures) = match &body {
+                            RekorEntryBody::DsseV002(dsse_body) => (
+                                &dsse_body.spec.dsse_v002.payload_hash.digest,
+                                &dsse_body.spec.dsse_v002.signatures,
+                            ),
+                            _ => {
+                                return Err(Error::Verification(
+                                    "expected DSSE v0.0.2 body, got different type".to_string(),
                                 ))
-                            })?;
-
-                        let body_str = String::from_utf8(body_bytes).map_err(|e| {
-                            Error::Verification(format!(
-                                "canonicalized body is not valid UTF-8: {}",
-                                e
-                            ))
-                        })?;
-
-                        let body: serde_json::Value =
-                            serde_json::from_str(&body_str).map_err(|e| {
-                                Error::Verification(format!(
-                                    "failed to parse canonicalized body: {}",
-                                    e
-                                ))
-                            })?;
-
-                        // Extract expected payload hash from Rekor entry (v0.0.2 format)
-                        let expected_hash = body
-                            .get("spec")
-                            .and_then(|s| s.get("dsseV002"))
-                            .and_then(|d| d.get("payloadHash"))
-                            .and_then(|h| h.get("digest"))
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| {
-                                Error::Verification(
-                                    "no payload hash in Rekor v0.0.2 entry".to_string(),
-                                )
-                            })?;
+                            }
+                        };
 
                         // Compute actual payload hash
                         let payload_bytes = base64::engine::general_purpose::STANDARD
@@ -491,7 +415,7 @@ impl Verifier {
                             base64::engine::general_purpose::STANDARD.encode(payload_hash);
 
                         // Compare hashes
-                        if payload_hash_b64 != expected_hash {
+                        if &payload_hash_b64 != expected_hash {
                             return Err(Error::Verification(format!(
                                 "DSSE payload hash mismatch: computed {}, expected {}",
                                 payload_hash_b64, expected_hash
@@ -500,28 +424,13 @@ impl Verifier {
 
                         // Also verify that the signature in the bundle matches what's in Rekor
                         // This prevents signature substitution attacks
-                        let rekor_signatures = body
-                            .get("spec")
-                            .and_then(|s| s.get("dsseV002"))
-                            .and_then(|d| d.get("signatures"))
-                            .and_then(|s| s.as_array())
-                            .ok_or_else(|| {
-                                Error::Verification(
-                                    "no signatures in Rekor v0.0.2 entry".to_string(),
-                                )
-                            })?;
-
                         // Check that at least one signature from the bundle matches Rekor
                         let mut found_match = false;
                         for bundle_sig in &envelope.signatures {
                             for rekor_sig in rekor_signatures {
-                                if let Some(rekor_sig_content) =
-                                    rekor_sig.get("content").and_then(|c| c.as_str())
-                                {
-                                    if bundle_sig.sig == rekor_sig_content {
-                                        found_match = true;
-                                        break;
-                                    }
+                                if bundle_sig.sig == rekor_sig.content {
+                                    found_match = true;
+                                    break;
                                 }
                             }
                             if found_match {
@@ -543,35 +452,25 @@ impl Verifier {
         if let SignatureContent::DsseEnvelope(envelope) = &bundle.content {
             for entry in &bundle.verification_material.tlog_entries {
                 if entry.kind_version.kind == "intoto" {
-                    // Decode and parse canonicalized body
-                    let body_bytes = base64::engine::general_purpose::STANDARD
-                        .decode(&entry.canonicalized_body)
-                        .map_err(|e| {
-                            Error::Verification(format!(
-                                "failed to decode canonicalized body: {}",
-                                e
+                    // Parse the Rekor entry body using typed structures
+                    let body = RekorEntryBody::from_base64_json(
+                        &entry.canonicalized_body,
+                        &entry.kind_version.kind,
+                        &entry.kind_version.version,
+                    )
+                    .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
+
+                    let (rekor_payload_b64, rekor_signatures) = match &body {
+                        RekorEntryBody::IntotoV002(intoto_body) => (
+                            &intoto_body.spec.content.envelope.payload,
+                            &intoto_body.spec.content.envelope.signatures,
+                        ),
+                        _ => {
+                            return Err(Error::Verification(
+                                "expected Intoto v0.0.2 body, got different type".to_string(),
                             ))
-                        })?;
-
-                    let body_str = String::from_utf8(body_bytes).map_err(|e| {
-                        Error::Verification(format!("canonicalized body is not valid UTF-8: {}", e))
-                    })?;
-
-                    let body: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| {
-                        Error::Verification(format!("failed to parse canonicalized body: {}", e))
-                    })?;
-
-                    // Extract DSSE envelope payload from Rekor entry
-                    // intoto v0.0.2: spec.content.envelope.payload (double base64-encoded)
-                    let rekor_payload_b64 = body
-                        .get("spec")
-                        .and_then(|s| s.get("content"))
-                        .and_then(|c| c.get("envelope"))
-                        .and_then(|e| e.get("payload"))
-                        .and_then(|p| p.as_str())
-                        .ok_or_else(|| {
-                            Error::Verification("no payload in intoto Rekor entry".to_string())
-                        })?;
+                        }
+                    };
 
                     // The Rekor entry has the payload double-base64-encoded, decode it once
                     let rekor_payload_bytes = base64::engine::general_purpose::STANDARD
@@ -592,45 +491,31 @@ impl Verifier {
                     }
 
                     // Also validate that the signatures match
-                    let rekor_signatures = body
-                        .get("spec")
-                        .and_then(|s| s.get("content"))
-                        .and_then(|c| c.get("envelope"))
-                        .and_then(|e| e.get("signatures"))
-                        .and_then(|s| s.as_array())
-                        .ok_or_else(|| {
-                            Error::Verification("no signatures in intoto Rekor entry".to_string())
-                        })?;
-
                     // Check that at least one signature from the bundle matches Rekor
                     let mut found_match = false;
                     for bundle_sig in &envelope.signatures {
                         for rekor_sig in rekor_signatures {
-                            if let Some(rekor_sig_b64) =
-                                rekor_sig.get("sig").and_then(|s| s.as_str())
-                            {
-                                // The Rekor signature is also double-base64-encoded, decode it once
-                                let rekor_sig_decoded = base64::engine::general_purpose::STANDARD
-                                    .decode(rekor_sig_b64)
-                                    .map_err(|e| {
-                                        Error::Verification(format!(
-                                            "failed to decode Rekor signature: {}",
-                                            e
-                                        ))
-                                    })?;
+                            // The Rekor signature is also double-base64-encoded, decode it once
+                            let rekor_sig_decoded = base64::engine::general_purpose::STANDARD
+                                .decode(&rekor_sig.sig)
+                                .map_err(|e| {
+                                    Error::Verification(format!(
+                                        "failed to decode Rekor signature: {}",
+                                        e
+                                    ))
+                                })?;
 
-                                let rekor_sig_content = String::from_utf8(rekor_sig_decoded)
-                                    .map_err(|e| {
-                                        Error::Verification(format!(
-                                            "Rekor signature not valid UTF-8: {}",
-                                            e
-                                        ))
-                                    })?;
+                            let rekor_sig_content = String::from_utf8(rekor_sig_decoded)
+                                .map_err(|e| {
+                                    Error::Verification(format!(
+                                        "Rekor signature not valid UTF-8: {}",
+                                        e
+                                    ))
+                                })?;
 
-                                if bundle_sig.sig == rekor_sig_content {
-                                    found_match = true;
-                                    break;
-                                }
+                            if bundle_sig.sig == rekor_sig_content {
+                                found_match = true;
+                                break;
                             }
                         }
                         if found_match {
@@ -653,49 +538,32 @@ impl Verifier {
         // because we need to ensure the hash in the bundle matches what's in Rekor
         for entry in &bundle.verification_material.tlog_entries {
             if entry.kind_version.kind == "hashedrekord" {
-                // Decode and parse canonicalized body
-                let body_bytes = base64::engine::general_purpose::STANDARD
-                    .decode(&entry.canonicalized_body)
-                    .map_err(|e| {
-                        Error::Verification(format!("failed to decode canonicalized body: {}", e))
-                    })?;
-
-                let body_str = String::from_utf8(body_bytes).map_err(|e| {
-                    Error::Verification(format!("canonicalized body is not valid UTF-8: {}", e))
-                })?;
-
-                let body: serde_json::Value = serde_json::from_str(&body_str).map_err(|e| {
-                    Error::Verification(format!("failed to parse canonicalized body: {}", e))
-                })?;
+                // Parse the Rekor entry body using typed structures
+                let body = RekorEntryBody::from_base64_json(
+                    &entry.canonicalized_body,
+                    &entry.kind_version.kind,
+                    &entry.kind_version.version,
+                )
+                .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
                 // Extract expected artifact hash from Rekor entry
                 // Different structure for v0.0.1 vs v0.0.2
-                let expected_hash_b64 = if entry.kind_version.version == "0.0.1" {
-                    // v0.0.1: spec.data.hash.value (hex)
-                    body.get("spec")
-                        .and_then(|s| s.get("data"))
-                        .and_then(|d| d.get("hash"))
-                        .and_then(|h| h.get("value"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                } else if entry.kind_version.version == "0.0.2" {
-                    // v0.0.2: spec.hashedRekordV002.data.digest (base64)
-                    body.get("spec")
-                        .and_then(|s| s.get("hashedRekordV002"))
-                        .and_then(|h| h.get("data"))
-                        .and_then(|d| d.get("digest"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                } else {
-                    None
+                let (expected_hash, is_hex_encoded) = match &body {
+                    RekorEntryBody::HashedRekordV001(rekord) => {
+                        // v0.0.1: spec.data.hash.value (hex)
+                        (&rekord.spec.data.hash.value, true)
+                    }
+                    RekorEntryBody::HashedRekordV002(rekord) => {
+                        // v0.0.2: spec.hashedRekordV002.data.digest (base64)
+                        (&rekord.spec.hashed_rekord_v002.data.digest, false)
+                    }
+                    _ => {
+                        return Err(Error::Verification(format!(
+                            "expected HashedRekord body, got different type for version {}",
+                            entry.kind_version.version
+                        )))
+                    }
                 };
-
-                let expected_hash = expected_hash_b64.ok_or_else(|| {
-                    Error::Verification(format!(
-                        "no artifact hash in hashedrekord {} entry",
-                        entry.kind_version.version
-                    ))
-                })?;
 
                 // Get the artifact hash to compare against Rekor
                 // If we have the actual artifact, compute its hash
@@ -735,13 +603,13 @@ impl Verifier {
                 };
 
                 // Compare hashes - v0.0.1 uses hex, v0.0.2 uses base64
-                let matches = if entry.kind_version.version == "0.0.1" {
+                let matches = if is_hex_encoded {
                     let artifact_hash_hex = hex::encode(&artifact_hash_to_check);
-                    artifact_hash_hex == expected_hash
+                    &artifact_hash_hex == expected_hash
                 } else {
                     let artifact_hash_b64 =
                         base64::engine::general_purpose::STANDARD.encode(&artifact_hash_to_check);
-                    artifact_hash_b64 == expected_hash
+                    &artifact_hash_b64 == expected_hash
                 };
 
                 if !matches {
@@ -753,27 +621,26 @@ impl Verifier {
 
                 // Validate that the certificate in Rekor matches the certificate in the bundle
                 // Extract certificate from Rekor entry
-                let rekor_cert_pem = if entry.kind_version.version == "0.0.1" {
-                    // v0.0.1: spec.signature.publicKey.content (PEM encoded)
-                    body.get("spec")
-                        .and_then(|s| s.get("signature"))
-                        .and_then(|sig| sig.get("publicKey"))
-                        .and_then(|pk| pk.get("content"))
-                        .and_then(|v| v.as_str())
-                } else if entry.kind_version.version == "0.0.2" {
-                    // v0.0.2: spec.hashedRekordV002.signature.verifier.x509Certificate.rawBytes (base64 DER)
-                    body.get("spec")
-                        .and_then(|s| s.get("hashedRekordV002"))
-                        .and_then(|h| h.get("signature"))
-                        .and_then(|sig| sig.get("verifier"))
-                        .and_then(|v| v.get("x509Certificate"))
-                        .and_then(|x| x.get("rawBytes"))
-                        .and_then(|v| v.as_str())
-                } else {
-                    None
+                let rekor_cert_str = match &body {
+                    RekorEntryBody::HashedRekordV001(rekord) => {
+                        // v0.0.1: spec.signature.publicKey.content (PEM encoded)
+                        Some((&rekord.spec.signature.public_key.content, true))
+                    }
+                    RekorEntryBody::HashedRekordV002(rekord) => {
+                        // v0.0.2: spec.hashedRekordV002.signature.verifier.x509Certificate.rawBytes (base64 DER)
+                        rekord
+                            .spec
+                            .hashed_rekord_v002
+                            .signature
+                            .verifier
+                            .x509_certificate
+                            .as_ref()
+                            .map(|cert| (&cert.raw_bytes, false))
+                    }
+                    _ => None
                 };
 
-                if let Some(rekor_cert_str) = rekor_cert_pem {
+                if let Some((rekor_cert_encoded, is_pem)) = rekor_cert_str {
                     // Get the certificate from the bundle
                     let bundle_cert_der = match &bundle.verification_material.content {
                         VerificationMaterialContent::X509CertificateChain { certificates } => {
@@ -795,10 +662,10 @@ impl Verifier {
                             })?;
 
                         // Decode Rekor certificate
-                        let rekor_cert_der_bytes = if entry.kind_version.version == "0.0.1" {
-                            // v0.0.1 uses PEM, need to decode it
+                        let rekor_cert_der_bytes = if is_pem {
+                            // v0.0.1 uses PEM (double base64-encoded), need to decode it
                             let rekor_cert_pem_decoded = base64::engine::general_purpose::STANDARD
-                                .decode(rekor_cert_str)
+                                .decode(rekor_cert_encoded)
                                 .map_err(|e| {
                                     Error::Verification(format!(
                                         "failed to decode Rekor cert PEM base64: {}",
@@ -814,38 +681,14 @@ impl Verifier {
                                     ))
                                 })?;
 
-                            // Extract DER from PEM
-                            // PEM format: -----BEGIN CERTIFICATE-----\nbase64\n-----END CERTIFICATE-----
-                            let start_marker = "-----BEGIN CERTIFICATE-----";
-                            let end_marker = "-----END CERTIFICATE-----";
-
-                            let start = rekor_cert_pem_str.find(start_marker).ok_or_else(|| {
-                                Error::Verification(
-                                    "Rekor cert: missing PEM start marker".to_string(),
-                                )
-                            })?;
-                            let end = rekor_cert_pem_str.find(end_marker).ok_or_else(|| {
-                                Error::Verification(
-                                    "Rekor cert: missing PEM end marker".to_string(),
-                                )
-                            })?;
-
-                            let pem_content = &rekor_cert_pem_str[start + start_marker.len()..end];
-                            let clean_content: String =
-                                pem_content.chars().filter(|c| !c.is_whitespace()).collect();
-
-                            base64::engine::general_purpose::STANDARD
-                                .decode(&clean_content)
-                                .map_err(|e| {
-                                    Error::Verification(format!(
-                                        "failed to decode Rekor cert PEM content: {}",
-                                        e
-                                    ))
-                                })?
+                            // Extract DER from PEM using our utility
+                            x509::der_from_pem(&rekor_cert_pem_str).map_err(|e| {
+                                Error::Verification(format!("failed to extract DER from PEM: {}", e))
+                            })?
                         } else {
                             // v0.0.2 already has base64 DER
                             base64::engine::general_purpose::STANDARD
-                                .decode(rekor_cert_str)
+                                .decode(rekor_cert_encoded)
                                 .map_err(|e| {
                                     Error::Verification(format!(
                                         "failed to decode Rekor cert DER: {}",
@@ -866,24 +709,19 @@ impl Verifier {
 
                 // Also validate that the signature in the bundle matches the signature in Rekor
                 // Extract signature from Rekor entry
-                let rekor_signature = if entry.kind_version.version == "0.0.1" {
-                    // v0.0.1: spec.signature.content (base64)
-                    body.get("spec")
-                        .and_then(|s| s.get("signature"))
-                        .and_then(|sig| sig.get("content"))
-                        .and_then(|v| v.as_str())
-                } else if entry.kind_version.version == "0.0.2" {
-                    // v0.0.2: spec.hashedRekordV002.signature.content (base64)
-                    body.get("spec")
-                        .and_then(|s| s.get("hashedRekordV002"))
-                        .and_then(|h| h.get("signature"))
-                        .and_then(|sig| sig.get("content"))
-                        .and_then(|v| v.as_str())
-                } else {
-                    None
+                let rekor_sig_b64 = match &body {
+                    RekorEntryBody::HashedRekordV001(rekord) => {
+                        // v0.0.1: spec.signature.content (base64)
+                        Some(&rekord.spec.signature.content)
+                    }
+                    RekorEntryBody::HashedRekordV002(rekord) => {
+                        // v0.0.2: spec.hashedRekordV002.signature.content (base64)
+                        Some(&rekord.spec.hashed_rekord_v002.signature.content)
+                    }
+                    _ => None
                 };
 
-                if let Some(rekor_sig_b64) = rekor_signature {
+                if let Some(rekor_sig_b64) = rekor_sig_b64 {
                     // Get the signature from the bundle (only for MessageSignature, not DSSE)
                     if let SignatureContent::MessageSignature(sig) = &bundle.content {
                         let bundle_sig_b64 = &sig.signature;
@@ -1246,7 +1084,7 @@ fn extract_tsa_timestamp(
             }
         } else {
             // No trusted root - fall back to just parsing (old behavior)
-            match parse_rfc3161_timestamp(&ts_bytes) {
+            match parse_timestamp(&ts_bytes) {
                 Ok(timestamp) => {
                     if let Some(earliest) = earliest_timestamp {
                         if timestamp < earliest {
@@ -1349,221 +1187,6 @@ fn verify_checkpoint(
     Err(Error::Verification(
         "No matching Rekor key found for checkpoint signature".to_string(),
     ))
-}
-
-/// Parse an RFC 3161 timestamp response to extract the timestamp
-/// This is a simplified parser that extracts the GeneralizedTime from TSTInfo
-fn parse_rfc3161_timestamp(timestamp_bytes: &[u8]) -> Result<i64> {
-    use x509_cert::der::{Decode, Reader, SliceReader};
-
-    // TimeStampResp ::= SEQUENCE {
-    //   status PKIStatusInfo,
-    //   timeStampToken TimeStampToken OPTIONAL }
-    //
-    // TimeStampToken ::= ContentInfo
-    // ContentInfo ::= SEQUENCE {
-    //   contentType OBJECT IDENTIFIER (id-signedData),
-    //   content [0] EXPLICIT SignedData }
-    //
-    // SignedData ::= SEQUENCE {
-    //   version INTEGER,
-    //   digestAlgorithms SET OF AlgorithmIdentifier,
-    //   encapContentInfo EncapsulatedContentInfo,
-    //   ...
-    // }
-    //
-    // EncapsulatedContentInfo ::= SEQUENCE {
-    //   eContentType OBJECT IDENTIFIER (id-ct-TSTInfo),
-    //   eContent [0] EXPLICIT OCTET STRING }
-    //
-    // TSTInfo ::= SEQUENCE {
-    //   version INTEGER,
-    //   policy TSAPolicyId,
-    //   messageImprint MessageImprint,
-    //   serialNumber INTEGER,
-    //   genTime GeneralizedTime,  <-- This is what we want!
-    //   ...
-    // }
-
-    let mut reader = SliceReader::new(timestamp_bytes)
-        .map_err(|e| Error::Verification(format!("failed to create DER reader: {}", e)))?;
-
-    // Read TimeStampResp SEQUENCE
-    let _tsr_header = x509_cert::der::Header::decode(&mut reader).map_err(|e| {
-        Error::Verification(format!("failed to decode TimeStampResp header: {}", e))
-    })?;
-
-    // Skip PKIStatusInfo (first field)
-    let status_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode status header: {}", e)))?;
-    reader
-        .read_slice(status_header.length)
-        .map_err(|e| Error::Verification(format!("failed to skip status: {}", e)))?;
-
-    // Read TimeStampToken (ContentInfo) SEQUENCE
-    let _content_info_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode ContentInfo header: {}", e)))?;
-
-    // Skip contentType OID
-    let oid_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode OID header: {}", e)))?;
-    reader
-        .read_slice(oid_header.length)
-        .map_err(|e| Error::Verification(format!("failed to skip OID: {}", e)))?;
-
-    // Read [0] EXPLICIT tag for content
-    let _explicit_tag = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode explicit tag: {}", e)))?;
-
-    // Read SignedData SEQUENCE
-    let _signed_data_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode SignedData header: {}", e)))?;
-
-    // Skip version INTEGER
-    let version_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode version: {}", e)))?;
-    reader
-        .read_slice(version_header.length)
-        .map_err(|e| Error::Verification(format!("failed to skip version: {}", e)))?;
-
-    // Skip digestAlgorithms SET
-    let digest_algs_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode digestAlgorithms: {}", e)))?;
-    reader
-        .read_slice(digest_algs_header.length)
-        .map_err(|e| Error::Verification(format!("failed to skip digestAlgorithms: {}", e)))?;
-
-    // Read EncapsulatedContentInfo SEQUENCE
-    let _encap_header = x509_cert::der::Header::decode(&mut reader).map_err(|e| {
-        Error::Verification(format!("failed to decode EncapsulatedContentInfo: {}", e))
-    })?;
-
-    // Skip eContentType OID
-    let econtent_oid_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode eContentType OID: {}", e)))?;
-    reader
-        .read_slice(econtent_oid_header.length)
-        .map_err(|e| Error::Verification(format!("failed to skip eContentType OID: {}", e)))?;
-
-    // Read eContent [0] EXPLICIT tag
-    let _econtent_tag = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode eContent tag: {}", e)))?;
-
-    // Read OCTET STRING wrapper
-    let _octet_string_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode OCTET STRING: {}", e)))?;
-
-    // Now we're at TSTInfo SEQUENCE
-    let _tst_info_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode TSTInfo: {}", e)))?;
-
-    // Skip version INTEGER
-    let tst_version_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode TSTInfo version: {}", e)))?;
-    reader
-        .read_slice(tst_version_header.length)
-        .map_err(|e| Error::Verification(format!("failed to skip TSTInfo version: {}", e)))?;
-
-    // Skip policy OID
-    let policy_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode policy: {}", e)))?;
-    reader
-        .read_slice(policy_header.length)
-        .map_err(|e| Error::Verification(format!("failed to skip policy: {}", e)))?;
-
-    // Skip messageImprint SEQUENCE
-    let msg_imprint_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode messageImprint: {}", e)))?;
-    reader
-        .read_slice(msg_imprint_header.length)
-        .map_err(|e| Error::Verification(format!("failed to skip messageImprint: {}", e)))?;
-
-    // Skip serialNumber INTEGER
-    let serial_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode serialNumber: {}", e)))?;
-    reader
-        .read_slice(serial_header.length)
-        .map_err(|e| Error::Verification(format!("failed to skip serialNumber: {}", e)))?;
-
-    // Read genTime (GeneralizedTime)
-    let gentime_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Verification(format!("failed to decode genTime: {}", e)))?;
-
-    let gentime_len: usize = gentime_header
-        .length
-        .try_into()
-        .map_err(|_| Error::Verification("invalid genTime length".to_string()))?;
-
-    let gentime_bytes = reader
-        .read_slice(
-            gentime_len
-                .try_into()
-                .map_err(|_| Error::Verification("failed to convert genTime length".to_string()))?,
-        )
-        .map_err(|e| Error::Verification(format!("failed to read genTime: {}", e)))?;
-
-    // Parse GeneralizedTime (format: YYYYMMDDHHMMSSZ or with fractional seconds)
-    let gentime_str = std::str::from_utf8(gentime_bytes)
-        .map_err(|e| Error::Verification(format!("invalid genTime UTF-8: {}", e)))?;
-
-    // Parse the timestamp using chrono
-    let timestamp = parse_generalized_time(gentime_str)?;
-
-    Ok(timestamp)
-}
-
-/// Parse a GeneralizedTime string to Unix timestamp
-/// Format: YYYYMMDDHHMMSSz or YYYYMMDDHHMMSS.fffZ
-fn parse_generalized_time(time_str: &str) -> Result<i64> {
-    // Remove trailing 'Z' if present
-    let time_str = time_str.trim_end_matches('Z').trim_end_matches('z');
-
-    // Split on '.' to separate fractional seconds if present
-    let parts: Vec<&str> = time_str.split('.').collect();
-    let base_time = parts[0];
-
-    // Ensure we have at least 14 characters (YYYYMMDDHHmmss)
-    if base_time.len() < 14 {
-        return Err(Error::Verification(format!(
-            "invalid GeneralizedTime format: {}",
-            time_str
-        )));
-    }
-
-    // Parse components
-    let year: i32 = base_time[0..4]
-        .parse()
-        .map_err(|_| Error::Verification("invalid year in GeneralizedTime".to_string()))?;
-    let month: u32 = base_time[4..6]
-        .parse()
-        .map_err(|_| Error::Verification("invalid month in GeneralizedTime".to_string()))?;
-    let day: u32 = base_time[6..8]
-        .parse()
-        .map_err(|_| Error::Verification("invalid day in GeneralizedTime".to_string()))?;
-    let hour: u32 = base_time[8..10]
-        .parse()
-        .map_err(|_| Error::Verification("invalid hour in GeneralizedTime".to_string()))?;
-    let minute: u32 = base_time[10..12]
-        .parse()
-        .map_err(|_| Error::Verification("invalid minute in GeneralizedTime".to_string()))?;
-    let second: u32 = base_time[12..14]
-        .parse()
-        .map_err(|_| Error::Verification("invalid second in GeneralizedTime".to_string()))?;
-
-    // Create NaiveDateTime
-    use chrono::{NaiveDate, TimeZone};
-    let naive_date = NaiveDate::from_ymd_opt(year, month, day)
-        .ok_or_else(|| Error::Verification(format!("invalid date: {}-{}-{}", year, month, day)))?;
-
-    let naive_datetime = naive_date
-        .and_hms_opt(hour, minute, second)
-        .ok_or_else(|| {
-            Error::Verification(format!("invalid time: {}:{}:{}", hour, minute, second))
-        })?;
-
-    // Convert to UTC timestamp
-    let datetime = chrono::Utc.from_utc_datetime(&naive_datetime);
-    Ok(datetime.timestamp())
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ pub mod hash;
 pub mod keyring;
 pub mod signing;
 pub mod verification;
+pub mod x509;
 
 pub use checkpoint::{compute_key_hint, LogCheckpoint, NoteSignature, SignedNote};
 pub use error::{Error, Result};
@@ -16,3 +17,4 @@ pub use hash::{sha256, sha384, sha512, Sha256Hasher};
 pub use keyring::Keyring;
 pub use signing::{KeyPair, PublicKeyPem, Signature, SigningScheme};
 pub use verification::{verify_signature, VerificationKey};
+pub use x509::{parse_certificate_info, CertificateInfo};

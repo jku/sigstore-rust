@@ -1342,6 +1342,7 @@ dependencies = [
  "sigstore-types",
  "spki",
  "thiserror",
+ "x509-cert",
 ]
 
 [[package]]

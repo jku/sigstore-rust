@@ -20,6 +20,14 @@ pub enum Error {
     /// Merkle proof error
     #[error("Merkle proof error: {0}")]
     Merkle(#[from] sigstore_merkle::Error),
+
+    /// Invalid response error
+    #[error("Invalid response: {0}")]
+    InvalidResponse(String),
+
+    /// Base64 decoding error
+    #[error("Base64 error: {0}")]
+    Base64(#[from] base64::DecodeError),
 }
 
 /// Result type for Rekor operations

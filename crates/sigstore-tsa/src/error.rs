@@ -56,6 +56,10 @@ pub enum Error {
     /// TSA certificate validation failed
     #[error("TSA certificate validation failed: {0}")]
     CertificateValidationError(String),
+
+    /// Timestamp parsing error
+    #[error("Timestamp parsing error: {0}")]
+    Parse(String),
 }
 
 /// Result type for TSA operations
