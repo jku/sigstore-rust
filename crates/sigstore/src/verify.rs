@@ -142,9 +142,7 @@ pub struct Verifier {
 impl Verifier {
     /// Create a new verifier with no trusted material
     pub fn new() -> Self {
-        Self {
-            trusted_root: None,
-        }
+        Self { trusted_root: None }
     }
 
     /// Create a verifier from a trusted root
@@ -308,14 +306,18 @@ impl Verifier {
                     let artifact_hash_hex = artifact_hash.to_hex();
 
                     // Parse the in-toto statement using typed structs
-                    let payload_str = String::from_utf8(payload_bytes)
-                        .map_err(|e| Error::Verification(format!("payload is not valid UTF-8: {}", e)))?;
+                    let payload_str = String::from_utf8(payload_bytes).map_err(|e| {
+                        Error::Verification(format!("payload is not valid UTF-8: {}", e))
+                    })?;
 
-                    let statement: Statement = serde_json::from_str(&payload_str)
-                        .map_err(|e| Error::Verification(format!("failed to parse in-toto statement: {}", e)))?;
+                    let statement: Statement = serde_json::from_str(&payload_str).map_err(|e| {
+                        Error::Verification(format!("failed to parse in-toto statement: {}", e))
+                    })?;
 
                     // Check if artifact hash matches any subject
-                    if !statement.subject.is_empty() && !statement.matches_sha256(&artifact_hash_hex) {
+                    if !statement.subject.is_empty()
+                        && !statement.matches_sha256(&artifact_hash_hex)
+                    {
                         return Err(Error::Verification(
                             "artifact hash does not match any subject in attestation".to_string(),
                         ));

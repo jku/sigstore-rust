@@ -97,7 +97,7 @@ impl OAuthClient {
     /// and verification URI to show to the user, along with the PKCE verifier.
     pub async fn start_device_flow(&self) -> Result<(DeviceCodeResponse, String)> {
         // Generate PKCE pair
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let mut verifier_bytes = [0u8; 32];
         rng.fill(&mut verifier_bytes);
         let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);

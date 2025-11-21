@@ -97,7 +97,9 @@ fn test_verifier_creation() {
     // Dummy artifact for testing
     let artifact = b"test artifact";
 
-    let policy = VerificationPolicy::default().skip_timestamp().skip_artifact_hash();
+    let policy = VerificationPolicy::default()
+        .skip_timestamp()
+        .skip_artifact_hash();
 
     let result = verifier.verify(artifact, &bundle, &policy);
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
@@ -109,7 +111,9 @@ fn test_verify_with_policy() {
     let artifact = b"test artifact";
 
     // Test with default policy (requires tlog verification)
-    let policy = VerificationPolicy::default().skip_timestamp().skip_artifact_hash();
+    let policy = VerificationPolicy::default()
+        .skip_timestamp()
+        .skip_artifact_hash();
 
     let result = verify(artifact, &bundle, &policy);
     assert!(result.is_ok(), "Verification failed: {:?}", result.err());
@@ -124,7 +128,9 @@ fn test_verify_extracts_integrated_time() {
     let bundle = Bundle::from_json(V03_BUNDLE_DSSE).unwrap();
     let artifact = b"test artifact";
 
-    let policy = VerificationPolicy::default().skip_timestamp().skip_artifact_hash();
+    let policy = VerificationPolicy::default()
+        .skip_timestamp()
+        .skip_artifact_hash();
 
     let result = verify(artifact, &bundle, &policy).unwrap();
 
@@ -216,7 +222,9 @@ fn test_full_verification_flow() {
 
     // Run full verification
     let artifact = b"dummy artifact";
-    let policy = VerificationPolicy::default().skip_timestamp().skip_artifact_hash();
+    let policy = VerificationPolicy::default()
+        .skip_timestamp()
+        .skip_artifact_hash();
 
     let result = verify(artifact, &bundle, &policy).unwrap();
     assert!(result.success);

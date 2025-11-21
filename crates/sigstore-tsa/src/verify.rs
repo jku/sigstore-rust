@@ -22,7 +22,7 @@ use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage, ALL_VERIFICATION
 const ID_KP_TIME_STAMPING: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x08];
 
 // OID for SignedData (1.2.840.113549.1.7.2)
-const ID_SIGNED_DATA_STR : ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.2");
+const ID_SIGNED_DATA_STR: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.2");
 
 // OID for message-digest attribute (1.2.840.113549.1.9.4)
 const OID_MESSAGE_DIGEST: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.4");
@@ -228,7 +228,6 @@ pub fn verify_timestamp_response(
     // Check that the timestamp is within the TSA validity period in the trusted root
     if let Some((start, end)) = opts.tsa_valid_for {
         if timestamp < start || timestamp > end {
-    
             tracing::error!(
                 "Timestamp {} is outside TSA validity period ({} to {})",
                 timestamp,
@@ -375,7 +374,6 @@ fn extract_certificates(signed_data: &SignedData) -> Vec<Certificate> {
                     certificates.push(cert.clone());
                 }
                 CertificateChoices::Other(_) => {
-            
                     tracing::debug!("Skipping non-standard certificate format");
                 }
             }
@@ -590,7 +588,6 @@ fn validate_tsa_certificate_chain(
 
     // If no roots are provided, skip certificate chain validation
     if opts.roots.is_empty() {
-
         tracing::debug!("No trusted roots provided, skipping certificate chain validation");
         return Ok(());
     }
