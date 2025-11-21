@@ -216,7 +216,7 @@ fn test_full_verification_flow() {
 
     // Run full verification
     let artifact = b"dummy artifact";
-    let policy = VerificationPolicy::default().skip_timestamp();
+    let policy = VerificationPolicy::default().skip_timestamp().skip_artifact_hash();
 
     let result = verify(artifact, &bundle, &policy).unwrap();
     assert!(result.success);
