@@ -11,15 +11,14 @@ use der::{
 use rand::Rng;
 use x509_cert::{ext::pkix::name::GeneralName, ext::Extensions};
 
-// TODO: use the const ones from `const_oid`
 /// OID for SHA-256: 2.16.840.1.101.3.4.2.1
-pub const OID_SHA256: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.1");
+pub const OID_SHA256: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_256;
 
 /// OID for SHA-384: 2.16.840.1.101.3.4.2.2
-pub const OID_SHA384: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.2");
+pub const OID_SHA384: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_384;
 
 /// OID for SHA-512: 2.16.840.1.101.3.4.2.3
-pub const OID_SHA512: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.2.3");
+pub const OID_SHA512: ObjectIdentifier = const_oid::db::rfc5912::ID_SHA_512;
 
 /// OID for id-ct-TSTInfo: 1.2.840.113549.1.9.16.1.4
 pub const OID_TST_INFO: ObjectIdentifier =
@@ -39,8 +38,8 @@ pub const OID_TST_INFO: ObjectIdentifier =
 ///
 /// A `Vec<u8>` containing 8-9 bytes suitable for passing to `Int::new()`.
 pub fn generate_positive_nonce_bytes() -> Vec<u8> {
-    let mut rng = rand::thread_rng();
-    let nonce_random: [u8; 8] = rng.r#gen();
+    let mut rng = rand::rng();
+    let nonce_random: [u8; 8] = rng.random();
 
     // Only prepend 0x00 if the high bit is set (to avoid negative number)
     if nonce_random[0] & 0x80 != 0 {

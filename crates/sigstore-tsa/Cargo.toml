@@ -12,26 +12,23 @@ sigstore-types = { path = "../sigstore-types" }
 sigstore-crypto = { path = "../sigstore-crypto" }
 aws-lc-rs = { workspace = true }
 der = { workspace = true }
-const-oid = { workspace = true }
+const-oid = { workspace = true, features = ["db"] }
 reqwest = { workspace = true, features = ["rustls-tls"] }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 rand = { workspace = true }
 
 # RFC 3161 timestamp verification
-cms = { version = "0.2", default-features = false }
-x509-cert = { version = "0.2", default-features = false }
-x509-tsp = { version = "0.1", default-features = false }
-cmpv2 = { version = "0.2", default-features = false }
-rustls-webpki = { version = "0.103", default-features = false, features = ["alloc", "std"] }
-rustls-pki-types = { version = "1.0", default-features = false }
-chrono = { version = "0.4", default-features = false, features = ["std"] }
-tracing = { version = "0.1", optional = true }
+cms = { workspace = true, default-features = false }
+x509-cert = { workspace = true }
+x509-tsp = { workspace = true, default-features = false }
+cmpv2 = { workspace = true, default-features = false }
+rustls-webpki = { workspace = true, default-features = false, features = ["alloc", "std"] }
+rustls-pki-types = { workspace = true, default-features = false }
+chrono = { workspace = true, features = ["std"] }
+tracing = { workspace = true}
 hex = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
 tokio = { workspace = true }
-
-[features]
-default = ["tracing"]

@@ -56,19 +56,14 @@ fn verify_dsse_v001(
     // Compute actual envelope hash using canonical JSON (RFC 8785)
     // Use the raw JSON if available, otherwise reserialize the envelope
     let envelope_json = if let Some(raw_json) = raw_envelope_json {
-        // Parse the raw JSON to a Value and then canonicalize it
-        let value: serde_json::Value = serde_json::from_str(raw_json).map_err(|e| {
-            Error::Verification(format!("failed to parse raw envelope JSON: {}", e))
-        })?;
-        serde_json_canonicalizer::to_vec(&value).map_err(|e| {
-            Error::Verification(format!("failed to canonicalize envelope JSON: {}", e))
-        })?
+        raw_json.as_bytes()
     } else {
         // Fall back to reserializing the envelope
-        serde_json_canonicalizer::to_vec(envelope).map_err(|e| {
+        &serde_json_canonicalizer::to_vec(envelope).map_err(|e| {
             Error::Verification(format!("failed to canonicalize envelope JSON: {}", e))
         })?
     };
+
     let envelope_hash = sigstore_crypto::sha256(&envelope_json);
     let envelope_hash_hex = hex::encode(envelope_hash);
 

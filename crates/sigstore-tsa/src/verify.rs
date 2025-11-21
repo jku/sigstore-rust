@@ -6,11 +6,12 @@
 //! - Message imprint validation
 //! - TSA Extended Key Usage validation
 
-use crate::asn1::{PkiStatus, TimeStampResp, TstInfo};
+use crate::asn1::{self, PkiStatus, TimeStampResp, TstInfo};
 use crate::error::{Error, Result};
 use chrono::{DateTime, Utc};
 use cms::cert::CertificateChoices;
 use cms::signed_data::{SignedData, SignerIdentifier};
+use const_oid::ObjectIdentifier;
 use rustls_pki_types::CertificateDer;
 use x509_cert::Certificate;
 
@@ -20,14 +21,11 @@ use webpki::{anchor_from_trusted_cert, EndEntityCert, KeyUsage, ALL_VERIFICATION
 // TimeStamping Extended Key Usage OID (1.3.6.1.5.5.7.3.8)
 const ID_KP_TIME_STAMPING: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x03, 0x08];
 
-// OID for id-ct-TSTInfo (1.2.840.113549.1.9.16.1.4)
-const OID_CONTENT_TYPE_TST_INFO: &str = "1.2.840.113549.1.9.16.1.4";
-
 // OID for SignedData (1.2.840.113549.1.7.2)
-const ID_SIGNED_DATA_STR: &str = "1.2.840.113549.1.7.2";
+const ID_SIGNED_DATA_STR : ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.7.2");
 
 // OID for message-digest attribute (1.2.840.113549.1.9.4)
-const OID_MESSAGE_DIGEST: &str = "1.2.840.113549.1.9.4";
+const OID_MESSAGE_DIGEST: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.9.4");
 
 /// Verification options for RFC 3161 timestamps
 #[derive(Debug, Clone)]
@@ -133,7 +131,6 @@ pub fn verify_timestamp_response(
     use cms::content_info::ContentInfo;
     use x509_cert::der::{Decode, Encode};
 
-    #[cfg(feature = "tracing")]
     tracing::debug!("Starting RFC 3161 timestamp verification");
 
     // Try to parse as TimeStampResp first, if that fails, try as ContentInfo
@@ -174,7 +171,7 @@ pub fn verify_timestamp_response(
     };
 
     // Verify content type is SignedData
-    if content_info.content_type.to_string() != ID_SIGNED_DATA_STR {
+    if content_info.content_type != ID_SIGNED_DATA_STR {
         return Err(Error::ParseError(
             "ContentInfo content type is not SignedData".to_string(),
         ));
@@ -197,7 +194,7 @@ pub fn verify_timestamp_response(
         .map_err(|e| Error::ParseError(format!("failed to decode SignedData: {}", e)))?;
 
     // Verify the content type inside SignedData is TSTInfo
-    if signed_data.encap_content_info.econtent_type.to_string() != OID_CONTENT_TYPE_TST_INFO {
+    if signed_data.encap_content_info.econtent_type != asn1::OID_TST_INFO {
         return Err(Error::ParseError(
             "encap content type is not TSTInfo".to_string(),
         ));
@@ -226,13 +223,12 @@ pub fn verify_timestamp_response(
         DateTime::from_timestamp(unix_duration.as_secs() as i64, unix_duration.subsec_nanos())
             .ok_or_else(|| Error::ParseError("invalid timestamp in TSTInfo".to_string()))?;
 
-    #[cfg(feature = "tracing")]
     tracing::debug!("Extracted timestamp: {}", timestamp);
 
     // Check that the timestamp is within the TSA validity period in the trusted root
     if let Some((start, end)) = opts.tsa_valid_for {
         if timestamp < start || timestamp > end {
-            #[cfg(feature = "tracing")]
+    
             tracing::error!(
                 "Timestamp {} is outside TSA validity period ({} to {})",
                 timestamp,
@@ -241,7 +237,7 @@ pub fn verify_timestamp_response(
             );
             return Err(Error::OutsideValidityPeriod);
         }
-        #[cfg(feature = "tracing")]
+
         tracing::debug!(
             "Timestamp {} is within TSA validity period ({} to {})",
             timestamp,
@@ -258,23 +254,19 @@ pub fn verify_timestamp_response(
         .ok_or(Error::NoTstInfo)?
         .value();
 
-    #[cfg(feature = "tracing")]
     tracing::debug!("Starting CMS signature verification");
     // Note: verify_cms_signature expects timestamp_response_bytes to extract signed_attrs
     // But now we are passing timestamp_token_bytes (ContentInfo).
     // extract_signed_attrs_bytes needs to be updated to handle ContentInfo!
     let signer_cert = verify_cms_signature(&signed_data, tst_info_der, &token_bytes, &opts)?;
-    #[cfg(feature = "tracing")]
     tracing::debug!("CMS signature verification completed successfully");
 
     // Extract intermediate certificates from the SignedData for chain validation
     let embedded_certs = extract_certificates(&signed_data);
 
     // Validate certificate chain using webpki
-    #[cfg(feature = "tracing")]
     tracing::debug!("Starting TSA certificate chain validation");
     validate_tsa_certificate_chain(&signer_cert, timestamp, &opts, &embedded_certs)?;
-    #[cfg(feature = "tracing")]
     tracing::debug!("TSA certificate chain validation completed successfully");
 
     Ok(TimestampResult { time: timestamp })
@@ -383,7 +375,7 @@ fn extract_certificates(signed_data: &SignedData) -> Vec<Certificate> {
                     certificates.push(cert.clone());
                 }
                 CertificateChoices::Other(_) => {
-                    #[cfg(feature = "tracing")]
+            
                     tracing::debug!("Skipping non-standard certificate format");
                 }
             }
@@ -452,7 +444,7 @@ fn verify_message_digest_attribute(
     // Find the message-digest attribute
     let message_digest_attr = signed_attrs
         .iter()
-        .find(|attr| attr.oid.to_string() == OID_MESSAGE_DIGEST)
+        .find(|attr| attr.oid == OID_MESSAGE_DIGEST)
         .ok_or_else(|| {
             Error::SignatureVerificationError(
                 "message-digest attribute not found in signed_attrs".to_string(),
@@ -598,7 +590,7 @@ fn validate_tsa_certificate_chain(
 
     // If no roots are provided, skip certificate chain validation
     if opts.roots.is_empty() {
-        #[cfg(feature = "tracing")]
+
         tracing::debug!("No trusted roots provided, skipping certificate chain validation");
         return Ok(());
     }
@@ -678,7 +670,6 @@ fn validate_tsa_certificate_chain(
     // Add intermediates from opts
     intermediate_ders.extend(opts.intermediates.iter().map(|c| c.clone().into_owned()));
 
-    #[cfg(feature = "tracing")]
     tracing::debug!(
         "Using {} embedded intermediate cert(s) + {} provided intermediate cert(s)",
         embedded_certs.len().saturating_sub(1),
@@ -689,7 +680,6 @@ fn validate_tsa_certificate_chain(
     let verification_time =
         UnixTime::since_unix_epoch(std::time::Duration::from_secs(timestamp.timestamp() as u64));
 
-    #[cfg(feature = "tracing")]
     tracing::debug!(
         "Verifying certificate chain at timestamp: {} (unix: {})",
         timestamp,
@@ -714,7 +704,6 @@ fn validate_tsa_certificate_chain(
             ))
         })?;
 
-    #[cfg(feature = "tracing")]
     tracing::debug!("TSA certificate chain validated successfully");
 
     Ok(())

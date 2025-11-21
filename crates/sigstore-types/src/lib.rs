@@ -9,6 +9,7 @@ pub mod dsse;
 pub mod encoding;
 pub mod error;
 pub mod hash;
+pub mod intoto;
 
 // Re-export base64_bytes for internal use
 pub(crate) use hash::base64_bytes;
@@ -25,3 +26,4 @@ pub use encoding::{
 };
 pub use error::{Error, Result};
 pub use hash::{HashAlgorithm, HashOutput, MessageImprint};
+pub use intoto::{Digest, Statement, Subject};

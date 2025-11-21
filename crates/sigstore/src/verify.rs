@@ -11,11 +11,10 @@ use base64::Engine;
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::parse_certificate_info;
-use sigstore_crypto::Keyring;
 use sigstore_rekor::body::RekorEntryBody;
 use sigstore_trust_root::TrustedRoot;
 
-use sigstore_types::{Bundle, Sha256Hash, SignatureContent};
+use sigstore_types::{Bundle, Sha256Hash, SignatureContent, Statement};
 
 /// Policy for verifying signatures
 #[derive(Debug, Clone)]
@@ -138,12 +137,6 @@ impl VerificationResult {
 pub struct Verifier {
     /// Trusted root containing verification material
     trusted_root: Option<TrustedRoot>,
-    /// Keyring for Rekor public keys
-    _rekor_keyring: Keyring,
-    /// Keyring for Fulcio root certificates
-    _fulcio_keyring: Keyring,
-    /// Keyring for timestamp authorities
-    _tsa_keyring: Keyring,
 }
 
 impl Verifier {
@@ -151,9 +144,6 @@ impl Verifier {
     pub fn new() -> Self {
         Self {
             trusted_root: None,
-            _rekor_keyring: Keyring::new(),
-            _fulcio_keyring: Keyring::new(),
-            _tsa_keyring: Keyring::new(),
         }
     }
 
@@ -301,11 +291,12 @@ impl Verifier {
         verify_impl::verify_dsse_entries(bundle)?;
         verify_impl::verify_intoto_entries(bundle)?;
         verify_impl::verify_hashedrekord_entries(bundle, artifact, policy.skip_artifact_hash)?;
+
         // 7. Verify artifact hash matches (for DSSE with in-toto statements)
         if !policy.skip_artifact_hash {
             if let SignatureContent::DsseEnvelope(envelope) = &bundle.content {
                 if envelope.payload_type == "application/vnd.in-toto+json" {
-                    // Decode payload and check subject digest
+                    // Decode payload
                     let payload_bytes = base64::engine::general_purpose::STANDARD
                         .decode(&envelope.payload)
                         .map_err(|e| {
@@ -316,35 +307,18 @@ impl Verifier {
                     let artifact_hash = Sha256Hash::from_bytes(sigstore_crypto::sha256(artifact));
                     let artifact_hash_hex = artifact_hash.to_hex();
 
-                    // Parse the in-toto statement to check subject digest
-                    if let Ok(payload_str) = String::from_utf8(payload_bytes) {
-                        if let Ok(statement) =
-                            serde_json::from_str::<serde_json::Value>(&payload_str)
-                        {
-                            if let Some(subjects) =
-                                statement.get("subject").and_then(|s| s.as_array())
-                            {
-                                let mut hash_matches = false;
-                                for subject in subjects {
-                                    if let Some(digest) = subject
-                                        .get("digest")
-                                        .and_then(|d| d.get("sha256"))
-                                        .and_then(|h| h.as_str())
-                                    {
-                                        if digest == artifact_hash_hex {
-                                            hash_matches = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                                if !hash_matches && !subjects.is_empty() {
-                                    return Err(Error::Verification(
-                                        "artifact hash does not match any subject in attestation"
-                                            .to_string(),
-                                    ));
-                                }
-                            }
-                        }
+                    // Parse the in-toto statement using typed structs
+                    let payload_str = String::from_utf8(payload_bytes)
+                        .map_err(|e| Error::Verification(format!("payload is not valid UTF-8: {}", e)))?;
+
+                    let statement: Statement = serde_json::from_str(&payload_str)
+                        .map_err(|e| Error::Verification(format!("failed to parse in-toto statement: {}", e)))?;
+
+                    // Check if artifact hash matches any subject
+                    if !statement.subject.is_empty() && !statement.matches_sha256(&artifact_hash_hex) {
+                        return Err(Error::Verification(
+                            "artifact hash does not match any subject in attestation".to_string(),
+                        ));
                     }
                 }
             }
