@@ -28,7 +28,17 @@ pub fn verify_dsse_entries(bundle: &Bundle) -> Result<()> {
     Ok(())
 }
 
-/// Verify DSSE v0.0.1 entry (envelope hash validation)
+/// Verify DSSE v0.0.1 entry
+///
+/// NOTE: This does NOT verify the envelope hash.
+/// The envelope hash in DSSE v0.0.1 entries cannot be reliably verified because:
+/// 1. The hash is computed over uncanonicalized JSON during submission to Rekor
+/// 2. JSON serialization can vary (field ordering, whitespace) between implementations
+/// 3. We cannot reproduce the exact JSON representation that was originally submitted
+///
+/// Instead, we verify:
+/// - Payload hash (hash of envelope.payload bytes)
+/// - Signatures list matches between entry and envelope
 fn verify_dsse_v001(
     entry: &TransparencyLogEntry,
     envelope: &sigstore_types::DsseEnvelope,
@@ -40,8 +50,11 @@ fn verify_dsse_v001(
     )
     .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
-    let expected_hash = match &body {
-        RekorEntryBody::DsseV001(dsse_body) => &dsse_body.spec.envelope_hash.value,
+    let (expected_hash, rekor_signatures) = match &body {
+        RekorEntryBody::DsseV001(dsse_body) => (
+            &dsse_body.spec.payload_hash.value,
+            &dsse_body.spec.signatures,
+        ),
         _ => {
             return Err(Error::Verification(
                 "expected DSSE v0.0.1 body, got different type".to_string(),
@@ -49,19 +62,45 @@ fn verify_dsse_v001(
         }
     };
 
-    // Compute actual envelope hash
-    let envelope_json = serde_json_canonicalizer::to_vec(envelope)
-        .map_err(|e| Error::Verification(format!("failed to canonicalize envelope JSON: {}", e)))?;
+    // Verify payload hash (v0.0.1 uses hex encoding)
+    let payload_bytes = envelope
+        .payload
+        .decode()
+        .map_err(|e| Error::Verification(format!("failed to decode DSSE payload: {}", e)))?;
+    let payload_hash = sigstore_crypto::sha256(&payload_bytes);
+    let payload_hash_hex = hex::encode(payload_hash);
 
-    let envelope_hash = sigstore_crypto::sha256(&envelope_json);
-    let envelope_hash_hex = hex::encode(envelope_hash);
-
-    // Compare hashes
-    if &envelope_hash_hex != expected_hash {
+    if &payload_hash_hex != expected_hash {
         return Err(Error::Verification(format!(
-            "DSSE envelope hash mismatch: computed {}, expected {}",
-            envelope_hash_hex, expected_hash
+            "DSSE payload hash mismatch: computed {}, expected {}",
+            payload_hash_hex, expected_hash
         )));
+    }
+
+    // Verify that the signatures in the bundle match what's in Rekor
+    // This prevents signature substitution attacks
+    if envelope.signatures.len() != rekor_signatures.len() {
+        return Err(Error::Verification(format!(
+            "DSSE signature count mismatch: bundle has {}, Rekor entry has {}",
+            envelope.signatures.len(),
+            rekor_signatures.len()
+        )));
+    }
+
+    // Check that each signature in the bundle exists in the Rekor entry
+    for bundle_sig in &envelope.signatures {
+        let mut found = false;
+        for rekor_sig in rekor_signatures {
+            if bundle_sig.sig == rekor_sig.signature {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Err(Error::Verification(
+                "DSSE signature in bundle does not match any signature in Rekor entry".to_string(),
+            ));
+        }
     }
 
     Ok(())
@@ -107,25 +146,32 @@ fn verify_dsse_v002(
         )));
     }
 
-    // Verify that the signature in the bundle matches what's in Rekor
+    // Verify that the signatures in the bundle match what's in Rekor
     // This prevents signature substitution attacks
-    let mut found_match = false;
+    // We need to ensure that the signature lists match (same count and content)
+
+    if envelope.signatures.len() != rekor_signatures.len() {
+        return Err(Error::Verification(format!(
+            "DSSE signature count mismatch: bundle has {}, Rekor entry has {}",
+            envelope.signatures.len(),
+            rekor_signatures.len()
+        )));
+    }
+
+    // Check that each signature in the bundle exists in the Rekor entry
     for bundle_sig in &envelope.signatures {
+        let mut found = false;
         for rekor_sig in rekor_signatures {
             if bundle_sig.sig == rekor_sig.content {
-                found_match = true;
+                found = true;
                 break;
             }
         }
-        if found_match {
-            break;
+        if !found {
+            return Err(Error::Verification(
+                "DSSE signature in bundle does not match any signature in Rekor entry".to_string(),
+            ));
         }
-    }
-
-    if !found_match {
-        return Err(Error::Verification(
-            "DSSE signature in bundle does not match Rekor entry".to_string(),
-        ));
     }
 
     Ok(())

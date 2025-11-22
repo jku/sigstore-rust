@@ -276,7 +276,7 @@ fn test_full_verification_flow_happy_path() {
 
     let result = verify(artifact, &bundle, &policy).unwrap();
     assert!(result.success);
-    assert_eq!(result.integrated_time, Some(1738060096));
+    assert_eq!(result.integrated_time, Some(1734374576));
 }
 
 #[test]

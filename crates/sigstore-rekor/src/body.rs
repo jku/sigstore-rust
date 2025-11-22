@@ -133,12 +133,30 @@ pub struct DsseV001Body {
 #[serde(rename_all = "camelCase")]
 pub struct DsseV001Spec {
     pub envelope_hash: EnvelopeHash,
+    pub payload_hash: PayloadHashV001,
+    pub signatures: Vec<DsseV001Signature>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnvelopeHash {
     pub algorithm: String,
     pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayloadHashV001 {
+    pub algorithm: String,
+    /// Hash value (hex or base64-encoded depending on algorithm)
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DsseV001Signature {
+    /// Base64-encoded signature content
+    pub signature: Base64Signature,
+    /// PEM-encoded certificate (base64-encoded)
+    pub verifier: Base64,
 }
 
 // ============================================================================

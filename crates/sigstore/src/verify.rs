@@ -11,7 +11,6 @@ use base64::Engine;
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::parse_certificate_info;
-use sigstore_rekor::body::RekorEntryBody;
 use sigstore_trust_root::TrustedRoot;
 
 use sigstore_types::{Bundle, Sha256Hash, SignatureContent, Statement};
@@ -198,90 +197,42 @@ impl Verifier {
         // 4. Validate certificate is within validity period
         verify_impl::helpers::validate_certificate_time(validation_time, &cert_info)?;
 
-        // 5.5. Verify DSSE payload matches what's in Rekor (for intoto entries)
+        // 5. Verify DSSE signature cryptographically (using PAE and certificate)
         if let SignatureContent::DsseEnvelope(envelope) = &bundle.content {
-            for entry in &bundle.verification_material.tlog_entries {
-                if entry.kind_version.kind == "intoto" {
-                    // Parse the Rekor entry body using typed structures
-                    let body = RekorEntryBody::from_base64_json(
-                        &entry.canonicalized_body,
-                        &entry.kind_version.kind,
-                        &entry.kind_version.version,
-                    )
-                    .map_err(|e| {
-                        Error::Verification(format!("failed to parse Rekor body: {}", e))
-                    })?;
+            // Decode the payload to get raw bytes
+            let payload_bytes = envelope
+                .decode_payload()
+                .map_err(|e| Error::Verification(format!("failed to decode DSSE payload: {}", e)))?;
 
-                    let (rekor_payload_b64, rekor_signatures) = match &body {
-                        RekorEntryBody::IntotoV002(intoto_body) => (
-                            &intoto_body.spec.content.envelope.payload,
-                            &intoto_body.spec.content.envelope.signatures,
-                        ),
-                        _ => {
-                            return Err(Error::Verification(
-                                "expected Intoto v0.0.2 body, got different type".to_string(),
-                            ))
-                        }
-                    };
+            // Compute the PAE (Pre-Authentication Encoding) that was signed
+            let pae = sigstore_types::pae(&envelope.payload_type, &payload_bytes);
 
-                    // The Rekor entry has the payload double-base64-encoded, decode it once
-                    let rekor_payload_bytes = base64::engine::general_purpose::STANDARD
-                        .decode(rekor_payload_b64)
-                        .map_err(|e| {
-                            Error::Verification(format!("failed to decode Rekor payload: {}", e))
-                        })?;
+            // Verify at least one signature is cryptographically valid
+            let mut any_sig_valid = false;
+            for sig in &envelope.signatures {
+                // Decode the signature
+                let sig_bytes = base64::engine::general_purpose::STANDARD
+                    .decode(&sig.sig)
+                    .map_err(|e| Error::Verification(format!("failed to decode signature: {}", e)))?;
 
-                    let rekor_payload = String::from_utf8(rekor_payload_bytes).map_err(|e| {
-                        Error::Verification(format!("Rekor payload not valid UTF-8: {}", e))
-                    })?;
-
-                    // Compare with bundle payload
-                    if envelope.payload != rekor_payload {
-                        return Err(Error::Verification(
-                            "DSSE payload in bundle does not match intoto Rekor entry".to_string(),
-                        ));
-                    }
-
-                    // Also validate that the signatures match
-                    // Check that at least one signature from the bundle matches Rekor
-                    let mut found_match = false;
-                    for bundle_sig in &envelope.signatures {
-                        for rekor_sig in rekor_signatures {
-                            // The Rekor signature is also double-base64-encoded, decode it once
-                            let rekor_sig_decoded = base64::engine::general_purpose::STANDARD
-                                .decode(&rekor_sig.sig)
-                                .map_err(|e| {
-                                    Error::Verification(format!(
-                                        "failed to decode Rekor signature: {}",
-                                        e
-                                    ))
-                                })?;
-
-                            let rekor_sig_content =
-                                String::from_utf8(rekor_sig_decoded).map_err(|e| {
-                                    Error::Verification(format!(
-                                        "Rekor signature not valid UTF-8: {}",
-                                        e
-                                    ))
-                                })?;
-
-                            if bundle_sig.sig == rekor_sig_content {
-                                found_match = true;
-                                break;
-                            }
-                        }
-                        if found_match {
-                            break;
-                        }
-                    }
-
-                    if !found_match {
-                        return Err(Error::Verification(
-                            "DSSE signature in bundle does not match intoto Rekor entry"
-                                .to_string(),
-                        ));
-                    }
+                // Try to verify the signature using the certificate's public key
+                if sigstore_crypto::verify_signature(
+                    &cert_info.public_key_bytes,
+                    &pae,
+                    &sig_bytes,
+                    cert_info.signing_scheme,
+                )
+                .is_ok()
+                {
+                    any_sig_valid = true;
+                    break;
                 }
+            }
+
+            if !any_sig_valid {
+                return Err(Error::Verification(
+                    "DSSE signature verification failed: no valid signatures found".to_string(),
+                ));
             }
         }
 

@@ -25,7 +25,7 @@ pub struct DsseSignature {
     /// Base64-encoded signature
     pub sig: Base64Signature,
     /// Key ID (optional hint for key lookup)
-    #[serde(default, skip_serializing_if = "KeyId::is_empty")]
+    #[serde(default)]
     pub keyid: KeyId,
 }
 
@@ -125,8 +125,8 @@ mod tests {
 
         let reserialized = serde_json::to_string(&envelope).unwrap();
         assert!(
-            !reserialized.contains("keyid"),
-            "Empty keyid should be omitted in output"
+            reserialized.contains(r#""keyid":"""#),
+            "Empty keyid should be included in output"
         );
 
         // Test with non-empty keyid

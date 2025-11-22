@@ -171,9 +171,9 @@ mod tests {
     #[test]
     fn test_extract_tagged_value() {
         // Create a simple ASN.1 sequence with an email tag (0x81)
-        let mut bytes = vec![0x30, 0x10]; // SEQUENCE
+        let mut bytes = vec![0x30, 12]; // SEQUENCE
         bytes.push(0x81); // rfc822Name tag
-        bytes.push(13); // length
+        bytes.push(16); // length
         bytes.extend_from_slice(b"test@example.com");
 
         let result = extract_tagged_value(&bytes, 0x81);
