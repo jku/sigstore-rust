@@ -18,8 +18,8 @@ pub fn verify_dsse_entries(bundle: &Bundle) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
         if entry.kind_version.kind == "dsse" {
             match entry.kind_version.version.as_str() {
-                "0.0.1" => verify_dsse_v001(entry, envelope)?,
-                "0.0.2" => verify_dsse_v002(entry, envelope)?,
+                "0.0.1" => verify_dsse_v001(entry, envelope, bundle)?,
+                "0.0.2" => verify_dsse_v002(entry, envelope, bundle)?,
                 _ => {} // Unknown version, skip
             }
         }
@@ -38,10 +38,11 @@ pub fn verify_dsse_entries(bundle: &Bundle) -> Result<()> {
 ///
 /// Instead, we verify:
 /// - Payload hash (hash of envelope.payload bytes)
-/// - Signatures list matches between entry and envelope
+/// - Signatures list matches between entry and envelope (both signature and verifier)
 fn verify_dsse_v001(
     entry: &TransparencyLogEntry,
     envelope: &sigstore_types::DsseEnvelope,
+    bundle: &Bundle,
 ) -> Result<()> {
     let body = RekorEntryBody::from_base64_json(
         &entry.canonicalized_body,
@@ -77,8 +78,28 @@ fn verify_dsse_v001(
         )));
     }
 
+    // Extract the signing certificate from the bundle
+    let cert_der = super::helpers::extract_certificate_der(&bundle.verification_material.content)?;
+
+    // Convert DER certificate to PEM format and base64 encode it
+    // This matches what Python does: base64_encode_pem_cert(bundle.signing_certificate)
+    // Use x509-cert crate for proper PEM encoding
+    use x509_cert::der::Decode;
+    use x509_cert::der::EncodePem;
+    let cert = x509_cert::Certificate::from_der(&cert_der).map_err(|e| {
+        Error::Verification(format!(
+            "failed to parse certificate for PEM encoding: {}",
+            e
+        ))
+    })?;
+    let cert_pem_str = cert
+        .to_pem(x509_cert::der::pem::LineEnding::LF)
+        .map_err(|e| Error::Verification(format!("failed to encode certificate as PEM: {}", e)))?;
+    let cert_pem_b64 = base64::engine::general_purpose::STANDARD.encode(cert_pem_str.as_bytes());
+
     // Verify that the signatures in the bundle match what's in Rekor
     // This prevents signature substitution attacks
+    // IMPORTANT: We must verify BOTH the signature bytes AND the verifier (certificate)
     if envelope.signatures.len() != rekor_signatures.len() {
         return Err(Error::Verification(format!(
             "DSSE signature count mismatch: bundle has {}, Rekor entry has {}",
@@ -88,17 +109,21 @@ fn verify_dsse_v001(
     }
 
     // Check that each signature in the bundle exists in the Rekor entry
+    // We must match both the signature AND the verifier to prevent signature substitution
     for bundle_sig in &envelope.signatures {
         let mut found = false;
         for rekor_sig in rekor_signatures {
-            if bundle_sig.sig == rekor_sig.signature {
+            // Compare both signature bytes AND the verifier (certificate)
+            // The signature field in the bundle is base64-encoded, same as in Rekor
+            // The verifier field contains the base64-encoded PEM certificate
+            if bundle_sig.sig == rekor_sig.signature && cert_pem_b64 == rekor_sig.verifier {
                 found = true;
                 break;
             }
         }
         if !found {
             return Err(Error::Verification(
-                "DSSE signature in bundle does not match any signature in Rekor entry".to_string(),
+                "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
             ));
         }
     }
@@ -110,6 +135,7 @@ fn verify_dsse_v001(
 fn verify_dsse_v002(
     entry: &TransparencyLogEntry,
     envelope: &sigstore_types::DsseEnvelope,
+    bundle: &Bundle,
 ) -> Result<()> {
     let body = RekorEntryBody::from_base64_json(
         &entry.canonicalized_body,
@@ -146,9 +172,13 @@ fn verify_dsse_v002(
         )));
     }
 
+    // Extract the signing certificate from the bundle (DER format, base64-encoded)
+    let cert_der = super::helpers::extract_certificate_der(&bundle.verification_material.content)?;
+    let cert_der_b64 = base64::engine::general_purpose::STANDARD.encode(&cert_der);
+
     // Verify that the signatures in the bundle match what's in Rekor
     // This prevents signature substitution attacks
-    // We need to ensure that the signature lists match (same count and content)
+    // IMPORTANT: We must verify BOTH the signature bytes AND the verifier (certificate)
 
     if envelope.signatures.len() != rekor_signatures.len() {
         return Err(Error::Verification(format!(
@@ -159,17 +189,23 @@ fn verify_dsse_v002(
     }
 
     // Check that each signature in the bundle exists in the Rekor entry
+    // We must match both the signature AND the verifier to prevent signature substitution
     for bundle_sig in &envelope.signatures {
         let mut found = false;
         for rekor_sig in rekor_signatures {
-            if bundle_sig.sig == rekor_sig.content {
+            // Compare both signature bytes AND the verifier (certificate)
+            // The signature field in the bundle is base64-encoded, same as in Rekor
+            // The verifier contains the x509Certificate.rawBytes (DER, base64-encoded)
+            if bundle_sig.sig == rekor_sig.content
+                && cert_der_b64 == rekor_sig.verifier.x509_certificate.raw_bytes
+            {
                 found = true;
                 break;
             }
         }
         if !found {
             return Err(Error::Verification(
-                "DSSE signature in bundle does not match any signature in Rekor entry".to_string(),
+                "DSSE signature in bundle does not match any signature in Rekor entry (signature or verifier mismatch)".to_string(),
             ));
         }
     }

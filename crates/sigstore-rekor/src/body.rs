@@ -192,6 +192,17 @@ pub struct PayloadHash {
 pub struct DsseV002Signature {
     /// Base64-encoded signature content
     pub content: Base64Signature,
+    /// Verifier information (certificate and key details)
+    pub verifier: DsseV002Verifier,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DsseV002Verifier {
+    /// Key algorithm details (e.g., "PKIX_ECDSA_P256_SHA_256")
+    pub key_details: String,
+    /// X.509 certificate information
+    pub x509_certificate: X509CertificateRaw,
 }
 
 // ============================================================================

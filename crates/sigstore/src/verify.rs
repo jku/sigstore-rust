@@ -200,9 +200,9 @@ impl Verifier {
         // 5. Verify DSSE signature cryptographically (using PAE and certificate)
         if let SignatureContent::DsseEnvelope(envelope) = &bundle.content {
             // Decode the payload to get raw bytes
-            let payload_bytes = envelope
-                .decode_payload()
-                .map_err(|e| Error::Verification(format!("failed to decode DSSE payload: {}", e)))?;
+            let payload_bytes = envelope.decode_payload().map_err(|e| {
+                Error::Verification(format!("failed to decode DSSE payload: {}", e))
+            })?;
 
             // Compute the PAE (Pre-Authentication Encoding) that was signed
             let pae = sigstore_types::pae(&envelope.payload_type, &payload_bytes);
@@ -213,7 +213,9 @@ impl Verifier {
                 // Decode the signature
                 let sig_bytes = base64::engine::general_purpose::STANDARD
                     .decode(&sig.sig)
-                    .map_err(|e| Error::Verification(format!("failed to decode signature: {}", e)))?;
+                    .map_err(|e| {
+                        Error::Verification(format!("failed to decode signature: {}", e))
+                    })?;
 
                 // Try to verify the signature using the certificate's public key
                 if sigstore_crypto::verify_signature(
