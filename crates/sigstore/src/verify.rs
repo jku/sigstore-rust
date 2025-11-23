@@ -7,7 +7,6 @@
 mod verify_impl;
 
 use crate::error::{Error, Result};
-use base64::Engine;
 use sigstore_bundle::validate_bundle_with_options;
 use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::parse_certificate_info;
@@ -145,17 +144,10 @@ impl Verifier {
     }
 
     /// Create a verifier from a trusted root
-    pub fn from_trusted_root(trusted_root: TrustedRoot) -> Self {
-        let mut verifier = Self::new();
-        verifier.trusted_root = Some(trusted_root);
-        verifier
-    }
-
-    /// Create a verifier from a trusted root
     pub fn new_with_trusted_root(trusted_root: &TrustedRoot) -> Self {
-        let mut verifier = Self::new();
-        verifier.trusted_root = Some(trusted_root.clone());
-        verifier
+        Self {
+            trusted_root: Some(trusted_root.clone()),
+        }
     }
 
     /// Verify an artifact against a bundle
@@ -183,8 +175,9 @@ impl Verifier {
         let cert_info = parse_certificate_info(&cert_der)
             .map_err(|e| Error::Verification(format!("failed to parse certificate: {}", e)))?;
 
-        // Store identity in result
+        // Store identity and issuer in result
         result.identity = cert_info.identity.clone();
+        result.issuer = cert_info.issuer.clone();
 
         // 3. Determine validation time from timestamps
         let signature_bytes = verify_impl::helpers::extract_signature_bytes(&bundle.content)?;
@@ -211,11 +204,9 @@ impl Verifier {
             let mut any_sig_valid = false;
             for sig in &envelope.signatures {
                 // Decode the signature
-                let sig_bytes = base64::engine::general_purpose::STANDARD
-                    .decode(&sig.sig)
-                    .map_err(|e| {
-                        Error::Verification(format!("failed to decode signature: {}", e))
-                    })?;
+                let sig_bytes = sig.sig.decode().map_err(|e| {
+                    Error::Verification(format!("failed to decode signature: {}", e))
+                })?;
 
                 // Try to verify the signature using the certificate's public key
                 if sigstore_crypto::verify_signature(
@@ -248,11 +239,9 @@ impl Verifier {
             if let SignatureContent::DsseEnvelope(envelope) = &bundle.content {
                 if envelope.payload_type == "application/vnd.in-toto+json" {
                     // Decode payload
-                    let payload_bytes = base64::engine::general_purpose::STANDARD
-                        .decode(&envelope.payload)
-                        .map_err(|e| {
-                            Error::Verification(format!("failed to decode payload: {}", e))
-                        })?;
+                    let payload_bytes = envelope.payload.decode().map_err(|e| {
+                        Error::Verification(format!("failed to decode payload: {}", e))
+                    })?;
 
                     // Compute artifact hash
                     let artifact_hash = Sha256Hash::from_bytes(sigstore_crypto::sha256(artifact));

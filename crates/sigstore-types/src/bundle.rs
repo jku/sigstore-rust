@@ -6,7 +6,9 @@
 
 use crate::checkpoint::Checkpoint;
 use crate::dsse::DsseEnvelope;
-use crate::encoding::{Base64, Base64Signature, LogIndex, LogKeyId};
+use crate::encoding::{
+    Base64Body, Base64Der, Base64Hash, Base64Signature, Base64Timestamp, LogIndex, LogKeyId,
+};
 use crate::error::{Error, Result};
 use crate::hash::HashAlgorithm;
 use serde::{Deserialize, Serialize};
@@ -153,7 +155,7 @@ pub struct MessageDigest {
     /// Hash algorithm
     pub algorithm: HashAlgorithm,
     /// Digest bytes (base64 encoded)
-    pub digest: Base64,
+    pub digest: Base64Hash,
 }
 
 /// Verification material containing certificate/key and log entries
@@ -199,7 +201,7 @@ pub enum VerificationMaterialContent {
 #[serde(rename_all = "camelCase")]
 pub struct CertificateContent {
     /// Base64-encoded DER certificate
-    pub raw_bytes: Base64,
+    pub raw_bytes: Base64Der,
 }
 
 /// X.509 certificate in the chain
@@ -207,7 +209,7 @@ pub struct CertificateContent {
 #[serde(rename_all = "camelCase")]
 pub struct X509Certificate {
     /// Base64-encoded DER certificate
-    pub raw_bytes: Base64,
+    pub raw_bytes: Base64Der,
 }
 
 /// A transparency log entry
@@ -230,7 +232,7 @@ pub struct TransparencyLogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inclusion_proof: Option<InclusionProof>,
     /// Canonicalized body (base64 encoded)
-    pub canonicalized_body: String,
+    pub canonicalized_body: Base64Body,
 }
 
 /// Log identifier
@@ -256,7 +258,7 @@ pub struct KindVersion {
 #[serde(rename_all = "camelCase")]
 pub struct InclusionPromise {
     /// Signed entry timestamp (base64 encoded)
-    pub signed_entry_timestamp: String,
+    pub signed_entry_timestamp: Base64Timestamp,
 }
 
 /// Inclusion proof in the Merkle tree
@@ -266,11 +268,11 @@ pub struct InclusionProof {
     /// Index of the entry in the log
     pub log_index: LogIndex,
     /// Root hash of the tree (base64 encoded)
-    pub root_hash: String,
+    pub root_hash: Base64Hash,
     /// Tree size at time of proof
     pub tree_size: String,
     /// Hashes in the inclusion proof path (base64 encoded)
-    pub hashes: Vec<String>,
+    pub hashes: Vec<Base64Hash>,
     /// Checkpoint (signed tree head)
     pub checkpoint: CheckpointData,
 }
@@ -304,7 +306,7 @@ pub struct TimestampVerificationData {
 #[serde(rename_all = "camelCase")]
 pub struct Rfc3161Timestamp {
     /// Signed timestamp data (base64 encoded DER)
-    pub signed_timestamp: String,
+    pub signed_timestamp: Base64Der,
 }
 
 // Custom Deserialize implementation for Bundle

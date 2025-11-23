@@ -4,7 +4,6 @@
 //! large verification logic into manageable pieces.
 
 use crate::error::{Error, Result};
-use base64::Engine;
 use sigstore_crypto::CertificateInfo;
 use sigstore_trust_root::TrustedRoot;
 use sigstore_tsa::parse_timestamp;
@@ -16,15 +15,17 @@ pub fn extract_certificate_der(
     verification_material: &VerificationMaterialContent,
 ) -> Result<Vec<u8>> {
     match verification_material {
-        VerificationMaterialContent::Certificate(cert) => base64::engine::general_purpose::STANDARD
-            .decode(&cert.raw_bytes)
+        VerificationMaterialContent::Certificate(cert) => cert
+            .raw_bytes
+            .decode()
             .map_err(|e| Error::Verification(format!("failed to decode certificate: {}", e))),
         VerificationMaterialContent::X509CertificateChain { certificates } => {
             if certificates.is_empty() {
                 return Err(Error::Verification("no certificates in chain".to_string()));
             }
-            base64::engine::general_purpose::STANDARD
-                .decode(&certificates[0].raw_bytes)
+            certificates[0]
+                .raw_bytes
+                .decode()
                 .map_err(|e| Error::Verification(format!("failed to decode certificate: {}", e)))
         }
         VerificationMaterialContent::PublicKey { .. } => Err(Error::Verification(
@@ -36,8 +37,9 @@ pub fn extract_certificate_der(
 /// Extract signature bytes from bundle content (needed for TSA verification)
 pub fn extract_signature_bytes(content: &SignatureContent) -> Result<Vec<u8>> {
     match content {
-        SignatureContent::MessageSignature(msg_sig) => base64::engine::general_purpose::STANDARD
-            .decode(&msg_sig.signature)
+        SignatureContent::MessageSignature(msg_sig) => msg_sig
+            .signature
+            .decode()
             .map_err(|e| Error::Verification(format!("failed to decode signature: {}", e))),
         SignatureContent::DsseEnvelope(envelope) => {
             if envelope.signatures.is_empty() {
@@ -45,8 +47,9 @@ pub fn extract_signature_bytes(content: &SignatureContent) -> Result<Vec<u8>> {
                     "no signatures in DSSE envelope".to_string(),
                 ));
             }
-            base64::engine::general_purpose::STANDARD
-                .decode(&envelope.signatures[0].sig)
+            envelope.signatures[0]
+                .sig
+                .decode()
                 .map_err(|e| Error::Verification(format!("failed to decode signature: {}", e)))
         }
     }
@@ -105,11 +108,10 @@ pub fn extract_tsa_timestamp(
         .rfc3161_timestamps
     {
         // Decode the base64-encoded timestamp
-        let ts_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &ts.signed_timestamp,
-        )
-        .map_err(|e| Error::Verification(format!("failed to decode TSA timestamp: {}", e)))?;
+        let ts_bytes = ts
+            .signed_timestamp
+            .decode()
+            .map_err(|e| Error::Verification(format!("failed to decode TSA timestamp: {}", e)))?;
 
         // If we have a trusted root, perform full verification
         if let Some(root) = trusted_root {

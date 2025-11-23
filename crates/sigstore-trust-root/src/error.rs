@@ -44,3 +44,18 @@ pub enum Error {
 
 /// Result type for trusted root operations
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Convert from sigstore_types::Error to our Error type
+impl From<sigstore_types::Error> for Error {
+    fn from(err: sigstore_types::Error) -> Self {
+        match err {
+            sigstore_types::Error::Base64(e) => Error::Base64(e),
+            sigstore_types::Error::Json(e) => Error::Json(e),
+            sigstore_types::Error::InvalidEncoding(s) => Error::InvalidKey(s),
+            sigstore_types::Error::InvalidCertificate(s) => Error::Certificate(s),
+            sigstore_types::Error::MissingField(s) => Error::MissingField(s),
+            // For other variants, convert to string error
+            _ => Error::InvalidKey(err.to_string()),
+        }
+    }
+}

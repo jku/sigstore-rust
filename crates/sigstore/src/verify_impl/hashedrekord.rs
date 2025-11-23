@@ -35,7 +35,7 @@ fn verify_hashedrekord_entry(
 ) -> Result<()> {
     // Parse the Rekor entry body
     let body = RekorEntryBody::from_base64_json(
-        &entry.canonicalized_body,
+        entry.canonicalized_body.as_str(),
         &entry.kind_version.kind,
         &entry.kind_version.version,
     )

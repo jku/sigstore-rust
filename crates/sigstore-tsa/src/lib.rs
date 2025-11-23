@@ -14,5 +14,5 @@ pub use asn1::{
 };
 pub use client::{timestamp_sigstore, TimestampClient};
 pub use error::{Error, Result};
-pub use parse::{parse_generalized_time, parse_timestamp};
+pub use parse::parse_timestamp;
 pub use verify::{verify_timestamp_response, TimestampResult, VerifyOpts};

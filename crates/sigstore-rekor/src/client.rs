@@ -4,7 +4,6 @@ use crate::entry::{
     DsseEntry, HashedRekord, HashedRekordV2, LogEntry, LogEntryResponse, LogInfo, SearchIndex,
 };
 use crate::error::{Error, Result};
-use base64::Engine;
 
 /// A client for interacting with Rekor
 pub struct RekorClient {
@@ -192,25 +191,9 @@ impl RekorClient {
                 .inclusion_proof
                 .map(|p| crate::entry::InclusionProof {
                     checkpoint: p.checkpoint.envelope,
-                    hashes: p
-                        .hashes
-                        .iter()
-                        .map(|h| {
-                            // V2 returns Base64, convert to Hex for consistency with V1/LogEntry
-                            let bytes = base64::engine::general_purpose::STANDARD
-                                .decode(h)
-                                .unwrap_or_default();
-                            hex::encode(bytes)
-                        })
-                        .collect(),
+                    hashes: p.hashes.clone(),
                     log_index: p.log_index.parse::<i64>().unwrap_or_default(),
-                    root_hash: {
-                        // V2 returns Base64, convert to Hex
-                        let bytes = base64::engine::general_purpose::STANDARD
-                            .decode(&p.root_hash)
-                            .unwrap_or_default();
-                        hex::encode(bytes)
-                    },
+                    root_hash: p.root_hash,
                     tree_size: p.tree_size.parse::<i64>().unwrap_or_default(),
                 }),
             signed_entry_timestamp: entry_v2.inclusion_promise.map(|p| p.signed_entry_timestamp),
@@ -218,9 +201,9 @@ impl RekorClient {
 
         Ok(LogEntry {
             uuid: "".to_string(), // V2 response doesn't include UUID in body
-            body: entry_v2.canonicalized_body,
+            body: entry_v2.canonicalized_body.into_string(),
             integrated_time,
-            log_i_d: entry_v2.log_id.key_id,
+            log_i_d: entry_v2.log_id.key_id.to_string(),
             log_index,
             verification,
         })

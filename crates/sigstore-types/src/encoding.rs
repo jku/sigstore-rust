@@ -35,6 +35,14 @@ pub struct Hash;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Pem;
 
+/// Marker: Canonicalized Rekor entry body
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Body;
+
+/// Marker: Signed entry timestamp
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Timestamp;
+
 /// Marker: Unknown or unspecified content
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Unknown;
@@ -451,6 +459,11 @@ impl Sha256Hash {
     pub fn as_slice(&self) -> &[u8] {
         &self.0
     }
+
+    /// Decode from a Base64Hash wrapper
+    pub fn from_base64_ref(b64: &Base64Hash) -> Result<Self> {
+        Self::try_from_slice(&b64.decode()?)
+    }
 }
 
 impl AsRef<[u8]> for Sha256Hash {
@@ -483,6 +496,12 @@ pub type Base64Hash = Base64<Hash>;
 
 /// Base64-encoded PEM text (double-encoded)
 pub type Base64Pem = Base64<Pem>;
+
+/// Base64-encoded canonicalized Rekor entry body
+pub type Base64Body = Base64<Body>;
+
+/// Base64-encoded signed entry timestamp
+pub type Base64Timestamp = Base64<Timestamp>;
 
 #[cfg(test)]
 mod tests {

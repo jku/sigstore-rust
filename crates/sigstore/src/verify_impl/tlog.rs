@@ -91,14 +91,11 @@ pub fn verify_checkpoint(
 
     // Verify that the checkpoint's root hash matches the inclusion proof's root hash
     let checkpoint_root_hash = &signed_note.checkpoint.root_hash;
-    let proof_root_hash_b64 = &inclusion_proof.root_hash;
 
     // Decode the base64-encoded root hash from the inclusion proof
-    let proof_root_hash = base64::engine::general_purpose::STANDARD
-        .decode(proof_root_hash_b64)
-        .map_err(|e| {
-            Error::Verification(format!("Failed to decode inclusion proof root hash: {}", e))
-        })?;
+    let proof_root_hash = inclusion_proof.root_hash.decode().map_err(|e| {
+        Error::Verification(format!("Failed to decode inclusion proof root hash: {}", e))
+    })?;
 
     if checkpoint_root_hash != &proof_root_hash {
         return Err(Error::Verification(format!(
@@ -167,7 +164,7 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
         .map_err(|_| Error::Verification(format!("Unknown log ID: {}", entry.log_id.key_id)))?;
 
     // Construct the payload
-    let body = entry.canonicalized_body.clone();
+    let body = entry.canonicalized_body.clone().into_string();
 
     let integrated_time = entry
         .integrated_time
@@ -195,8 +192,9 @@ pub fn verify_set(entry: &TransparencyLogEntry, trusted_root: &TrustedRoot) -> R
         .map_err(|e| Error::Verification(format!("Canonicalization failed: {}", e)))?;
 
     // Verify signature
-    let signature = base64::engine::general_purpose::STANDARD
-        .decode(&promise.signed_entry_timestamp)
+    let signature = promise
+        .signed_entry_timestamp
+        .decode()
         .map_err(|_| Error::Verification("Invalid base64 signature".into()))?;
 
     verify_signature(

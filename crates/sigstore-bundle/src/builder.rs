@@ -78,8 +78,9 @@ impl BundleBuilder {
 
     /// Add an RFC 3161 timestamp (base64 encoded)
     pub fn add_rfc3161_timestamp(mut self, signed_timestamp: String) -> Self {
-        self.rfc3161_timestamps
-            .push(Rfc3161Timestamp { signed_timestamp });
+        self.rfc3161_timestamps.push(Rfc3161Timestamp {
+            signed_timestamp: signed_timestamp.into(),
+        });
         self
     }
 
@@ -185,9 +186,12 @@ impl TlogEntryBuilder {
     }
 
     /// Set the inclusion promise (Signed Entry Timestamp)
-    pub fn inclusion_promise(mut self, signed_entry_timestamp: String) -> Self {
+    pub fn inclusion_promise(
+        mut self,
+        signed_entry_timestamp: impl Into<sigstore_types::Base64Timestamp>,
+    ) -> Self {
         self.inclusion_promise = Some(InclusionPromise {
-            signed_entry_timestamp,
+            signed_entry_timestamp: signed_entry_timestamp.into(),
         });
         self
     }
@@ -203,9 +207,9 @@ impl TlogEntryBuilder {
     ) -> Self {
         self.inclusion_proof = Some(InclusionProof {
             log_index: log_index.to_string().into(),
-            root_hash,
+            root_hash: root_hash.into(),
             tree_size: tree_size.to_string(),
-            hashes,
+            hashes: hashes.into_iter().map(|h| h.into()).collect(),
             checkpoint: CheckpointData {
                 envelope: checkpoint,
             },
@@ -227,7 +231,7 @@ impl TlogEntryBuilder {
             integrated_time: self.integrated_time.to_string(),
             inclusion_promise: self.inclusion_promise,
             inclusion_proof: self.inclusion_proof,
-            canonicalized_body: self.canonicalized_body,
+            canonicalized_body: self.canonicalized_body.into(),
         }
     }
 }

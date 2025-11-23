@@ -15,14 +15,15 @@ pub mod intoto;
 pub(crate) use hash::base64_bytes;
 
 pub use bundle::{
-    Bundle, BundleVersion, InclusionProof, MediaType, MessageSignature, SignatureContent,
-    TransparencyLogEntry, VerificationMaterial,
+    Bundle, BundleVersion, CheckpointData, InclusionPromise, InclusionProof, KindVersion, LogId,
+    MediaType, MessageSignature, SignatureContent, TransparencyLogEntry, VerificationMaterial,
 };
 pub use checkpoint::{Checkpoint, CheckpointSignature};
 pub use dsse::{pae, DsseEnvelope, DsseSignature};
 pub use encoding::{
-    Base64, Base64Der, Base64Hash, Base64Payload, Base64Pem, Base64Signature, Der, Hash, Hex,
-    KeyId, LogIndex, LogKeyId, Payload, Pem, Sha256Hash, Signature, Unknown,
+    Base64, Base64Body, Base64Der, Base64Hash, Base64Payload, Base64Pem, Base64Signature,
+    Base64Timestamp, Body, Der, Hash, Hex, KeyId, LogIndex, LogKeyId, Payload, Pem, Sha256Hash,
+    Signature, Timestamp, Unknown,
 };
 pub use error::{Error, Result};
 pub use hash::{HashAlgorithm, HashOutput, MessageImprint};

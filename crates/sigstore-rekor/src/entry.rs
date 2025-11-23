@@ -3,7 +3,10 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sigstore_crypto::{PublicKeyPem, Signature};
-use sigstore_types::{Base64Pem, Base64Signature, Sha256Hash};
+use sigstore_types::{
+    Base64Body, Base64Der, Base64Hash, Base64Pem, Base64Signature, Base64Timestamp, CheckpointData,
+    InclusionPromise, KindVersion, LogId, Sha256Hash,
+};
 use std::collections::HashMap;
 
 /// A log entry from Rekor
@@ -35,21 +38,21 @@ pub struct Verification {
     pub inclusion_proof: Option<InclusionProof>,
     /// Signed entry timestamp (SET)
     #[serde(default)]
-    pub signed_entry_timestamp: Option<String>,
+    pub signed_entry_timestamp: Option<Base64Timestamp>,
 }
 
-/// Inclusion proof for a log entry
+/// Inclusion proof for a log entry (V1 API - uses i64 for indices)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InclusionProof {
     /// Checkpoint (signed tree head)
     pub checkpoint: String,
     /// Hashes in the proof path
-    pub hashes: Vec<String>,
+    pub hashes: Vec<Base64Hash>,
     /// Log index
     pub log_index: i64,
     /// Root hash
-    pub root_hash: String,
+    pub root_hash: Base64Hash,
     /// Tree size
     pub tree_size: i64,
 }
@@ -257,7 +260,7 @@ pub struct HashedRekordV2 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashedRekordRequestV002 {
-    pub digest: String, // base64
+    pub digest: Base64Hash,
     pub signature: HashedRekordSignatureV2,
 }
 
@@ -265,7 +268,7 @@ pub struct HashedRekordRequestV002 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HashedRekordSignatureV2 {
     /// Signature content (base64 encoded)
-    pub content: String,
+    pub content: Base64Signature,
     /// Verifier
     pub verifier: HashedRekordVerifierV2,
 }
@@ -289,7 +292,7 @@ pub struct HashedRekordVerifierV2 {
 pub struct HashedRekordPublicKeyV2 {
     /// Raw bytes (base64 encoded DER)
     #[serde(rename = "rawBytes")]
-    pub content: String,
+    pub content: Base64Der,
 }
 
 impl HashedRekordV2 {
@@ -327,14 +330,14 @@ impl HashedRekordV2 {
 
         Self {
             request: HashedRekordRequestV002 {
-                digest: hash_base64,
+                digest: hash_base64.into(),
                 signature: HashedRekordSignatureV2 {
-                    content: signature_base64.to_string(),
+                    content: signature_base64.to_string().into(),
                     verifier: HashedRekordVerifierV2 {
                         // Assuming ECDSA P-256 SHA-256 for now as per conformance tests
                         key_details: "PKIX_ECDSA_P256_SHA_256".to_string(),
                         x509_certificate: Some(HashedRekordPublicKeyV2 {
-                            content: cert_base64,
+                            content: cert_base64.into(),
                         }),
                         public_key: None,
                     },
@@ -354,42 +357,18 @@ pub struct LogEntryV2 {
     pub integrated_time: String,
     pub inclusion_promise: Option<InclusionPromise>,
     pub inclusion_proof: Option<InclusionProofV2>,
-    pub canonicalized_body: String,
+    pub canonicalized_body: Base64Body,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LogId {
-    pub key_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct KindVersion {
-    pub kind: String,
-    pub version: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InclusionPromise {
-    pub signed_entry_timestamp: String,
-}
-
+/// Inclusion proof V2 (similar to bundle InclusionProof but with String log_index)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InclusionProofV2 {
     pub log_index: String,
-    pub root_hash: String,
+    pub root_hash: Base64Hash,
     pub tree_size: String,
-    pub hashes: Vec<String>,
-    pub checkpoint: CheckpointV2,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CheckpointV2 {
-    pub envelope: String,
+    pub hashes: Vec<Base64Hash>,
+    pub checkpoint: CheckpointData,
 }
 
 #[cfg(test)]
@@ -425,7 +404,7 @@ mod tests {
             "c2lnbmF0dXJl",
             "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----",
         );
-        assert!(!entry.request.digest.is_empty());
-        assert_eq!(entry.request.signature.content, "c2lnbmF0dXJl");
+        assert!(!entry.request.digest.as_str().is_empty());
+        assert_eq!(entry.request.signature.content.as_str(), "c2lnbmF0dXJl");
     }
 }

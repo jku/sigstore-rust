@@ -127,8 +127,6 @@ fn validate_common(bundle: &Bundle, options: &ValidationOptions) -> Result<()> {
 
 /// Validate inclusion proofs in the bundle
 fn validate_inclusion_proofs(bundle: &Bundle) -> Result<()> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-
     for entry in &bundle.verification_material.tlog_entries {
         if let Some(proof) = &entry.inclusion_proof {
             // Parse the checkpoint to get the expected root
@@ -138,16 +136,17 @@ fn validate_inclusion_proofs(bundle: &Bundle) -> Result<()> {
                 .map_err(|e| Error::Validation(format!("failed to parse checkpoint: {}", e)))?;
 
             // Decode the leaf (canonicalized body)
-            let leaf_data = STANDARD.decode(&entry.canonicalized_body).map_err(|e| {
+            let leaf_data = entry.canonicalized_body.decode().map_err(|e| {
                 Error::Validation(format!("failed to decode canonicalized body: {}", e))
             })?;
 
-            // Decode proof hashes
+            // Decode proof hashes (filter out empty hashes which shouldn't be present but handle gracefully)
             let proof_hashes: Vec<Sha256Hash> = proof
                 .hashes
                 .iter()
+                .filter(|h| !h.as_str().is_empty())
                 .map(|h| {
-                    Sha256Hash::from_base64(h).map_err(|e| {
+                    Sha256Hash::from_base64_ref(h).map_err(|e| {
                         Error::Validation(format!("failed to decode proof hash: {}", e))
                     })
                 })

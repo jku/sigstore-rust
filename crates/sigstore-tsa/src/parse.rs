@@ -1,170 +1,153 @@
 //! RFC 3161 timestamp parsing utilities
 //!
 //! This module provides utilities for parsing RFC 3161 timestamp tokens
-//! and extracting the timestamp value.
+//! and extracting the timestamp value using the RustCrypto ecosystem.
 
+use crate::asn1::{PkiStatus, TimeStampResp, TstInfo};
 use crate::error::{Error, Result};
-use x509_cert::der::{Decode, Reader, SliceReader};
+use cms::content_info::ContentInfo;
+use cms::signed_data::SignedData;
+use x509_cert::der::{Decode, Encode};
+
+/// OID for SignedData (1.2.840.113549.1.7.2)
+const ID_SIGNED_DATA: &str = "1.2.840.113549.1.7.2";
+
+/// OID for TSTInfo (1.2.840.113549.1.9.16.1.4)
+const ID_CT_TST_INFO: &str = "1.2.840.113549.1.9.16.1.4";
+
+/// Parse RFC 3161 timestamp token and extract TSTInfo, SignedData, and token bytes
+///
+/// This is the core parsing function used by both `parse_timestamp()` and
+/// `verify_timestamp_response()` to avoid duplication.
+///
+/// # Arguments
+///
+/// * `timestamp_bytes` - The RFC 3161 timestamp token bytes (DER encoded)
+///
+/// # Returns
+///
+/// Returns a tuple of:
+/// - `TstInfo`: The parsed timestamp info structure
+/// - `SignedData`: The CMS SignedData container (needed for verification)
+/// - `Vec<u8>`: The token bytes (needed for signature verification)
+pub(crate) fn parse_timestamp_token(
+    timestamp_bytes: &[u8],
+) -> Result<(TstInfo, SignedData, Vec<u8>)> {
+    // Try to parse as TimeStampResp first, if that fails, try as ContentInfo
+    let (content_info, token_bytes) = match TimeStampResp::from_der(timestamp_bytes) {
+        Ok(resp) => {
+            // Check status
+            if resp.status.status != PkiStatus::Granted as u8
+                && resp.status.status != PkiStatus::GrantedWithMods as u8
+            {
+                return Err(Error::Parse(format!(
+                    "Timestamp request not granted: status {}",
+                    resp.status.status
+                )));
+            }
+
+            // Extract the timestamp token
+            let token_any = resp
+                .time_stamp_token
+                .ok_or_else(|| Error::Parse("TimeStampResp missing timeStampToken".to_string()))?;
+
+            // Convert to DER bytes and parse as ContentInfo
+            let bytes = token_any
+                .to_der()
+                .map_err(|e| Error::Parse(format!("failed to encode token: {}", e)))?;
+
+            let content_info = ContentInfo::from_der(&bytes)
+                .map_err(|e| Error::Parse(format!("failed to decode ContentInfo: {}", e)))?;
+
+            (content_info, bytes)
+        }
+        Err(_) => {
+            // Try as ContentInfo directly
+            let content_info = ContentInfo::from_der(timestamp_bytes)
+                .map_err(|e| Error::Parse(format!("failed to decode TimeStampToken: {}", e)))?;
+            (content_info, timestamp_bytes.to_vec())
+        }
+    };
+
+    // Verify content type is SignedData
+    if content_info.content_type.to_string() != ID_SIGNED_DATA {
+        return Err(Error::Parse(format!(
+            "ContentInfo content type is not SignedData: {}",
+            content_info.content_type
+        )));
+    }
+
+    // Decode SignedData from the content
+    let signed_data_der = content_info
+        .content
+        .to_der()
+        .map_err(|e| Error::Parse(format!("failed to encode SignedData content: {}", e)))?;
+
+    let signed_data = SignedData::from_der(&signed_data_der)
+        .map_err(|e| Error::Parse(format!("failed to decode SignedData: {}", e)))?;
+
+    // Verify the content type inside SignedData is TSTInfo
+    if signed_data.encap_content_info.econtent_type.to_string() != ID_CT_TST_INFO {
+        return Err(Error::Parse(format!(
+            "Encapsulated content type is not TSTInfo: {}",
+            signed_data.encap_content_info.econtent_type
+        )));
+    }
+
+    // Extract the TSTInfo
+    let tst_info_any = signed_data
+        .encap_content_info
+        .econtent
+        .as_ref()
+        .ok_or_else(|| Error::Parse("Missing encapsulated content".to_string()))?;
+
+    // Parse TSTInfo from the content bytes
+    let tst_info = TstInfo::from_der(tst_info_any.value())
+        .map_err(|e| Error::Parse(format!("failed to decode TSTInfo: {}", e)))?;
+
+    Ok((tst_info, signed_data, token_bytes))
+}
 
 /// Parse an RFC 3161 timestamp response to extract the timestamp
 ///
-/// This extracts the GeneralizedTime from TSTInfo in the timestamp response.
-/// The structure is:
-/// ```text
-/// TimeStampResp ::= SEQUENCE {
-///   status PKIStatusInfo,
-///   timeStampToken TimeStampToken OPTIONAL }
+/// This extracts the GeneralizedTime from TSTInfo in the timestamp response
+/// using proper DER parsing from the RustCrypto ecosystem.
 ///
-/// TimeStampToken ::= ContentInfo
-/// ContentInfo ::= SEQUENCE {
-///   contentType OBJECT IDENTIFIER (id-signedData),
-///   content [0] EXPLICIT SignedData }
+/// The structure is parsed using these crates:
+/// - `cms`: Handles the outer SignedData wrapper (RFC 5652)
+/// - `x509-cert`: Handles certificates and standard X.509 types
+/// - `der`: The core parsing engine
 ///
-/// SignedData ::= SEQUENCE {
-///   version INTEGER,
-///   digestAlgorithms SET OF AlgorithmIdentifier,
-///   encapContentInfo EncapsulatedContentInfo,
-///   ... }
+/// # Arguments
 ///
-/// EncapsulatedContentInfo ::= SEQUENCE {
-///   eContentType OBJECT IDENTIFIER (id-ct-TSTInfo),
-///   eContent [0] EXPLICIT OCTET STRING }
+/// * `timestamp_bytes` - The RFC 3161 timestamp token bytes (DER encoded)
 ///
-/// TSTInfo ::= SEQUENCE {
-///   version INTEGER,
-///   policy TSAPolicyId,
-///   messageImprint MessageImprint,
-///   serialNumber INTEGER,
-///   genTime GeneralizedTime,  <-- This is what we extract!
-///   ... }
-/// ```
+/// # Returns
+///
+/// Returns the timestamp as a Unix timestamp (seconds since epoch)
 pub fn parse_timestamp(timestamp_bytes: &[u8]) -> Result<i64> {
-    let mut reader = SliceReader::new(timestamp_bytes)
-        .map_err(|e| Error::Parse(format!("failed to create DER reader: {}", e)))?;
+    let (tst_info, _signed_data, _token_bytes) = parse_timestamp_token(timestamp_bytes)?;
 
-    // Read TimeStampResp SEQUENCE
-    let _tsr_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode TimeStampResp header: {}", e)))?;
+    // Extract the timestamp using GeneralizedTime's built-in conversion
+    let system_time = tst_info.gen_time.to_system_time();
+    let unix_duration = system_time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| Error::Parse("timestamp before Unix epoch".to_string()))?;
 
-    // Skip PKIStatusInfo (first field)
-    let status_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode status header: {}", e)))?;
-    reader
-        .read_slice(status_header.length)
-        .map_err(|e| Error::Parse(format!("failed to skip status: {}", e)))?;
-
-    // Read TimeStampToken (ContentInfo) SEQUENCE
-    let _content_info_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode ContentInfo header: {}", e)))?;
-
-    // Skip contentType OID
-    let oid_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode OID header: {}", e)))?;
-    reader
-        .read_slice(oid_header.length)
-        .map_err(|e| Error::Parse(format!("failed to skip OID: {}", e)))?;
-
-    // Read [0] EXPLICIT tag for content
-    let _explicit_tag = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode explicit tag: {}", e)))?;
-
-    // Read SignedData SEQUENCE
-    let _signed_data_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode SignedData header: {}", e)))?;
-
-    // Skip version INTEGER
-    let version_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode version: {}", e)))?;
-    reader
-        .read_slice(version_header.length)
-        .map_err(|e| Error::Parse(format!("failed to skip version: {}", e)))?;
-
-    // Skip digestAlgorithms SET
-    let digest_algs_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode digestAlgorithms: {}", e)))?;
-    reader
-        .read_slice(digest_algs_header.length)
-        .map_err(|e| Error::Parse(format!("failed to skip digestAlgorithms: {}", e)))?;
-
-    // Read EncapsulatedContentInfo SEQUENCE
-    let _encap_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode EncapsulatedContentInfo: {}", e)))?;
-
-    // Skip eContentType OID
-    let econtent_oid_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode eContentType OID: {}", e)))?;
-    reader
-        .read_slice(econtent_oid_header.length)
-        .map_err(|e| Error::Parse(format!("failed to skip eContentType OID: {}", e)))?;
-
-    // Read eContent [0] EXPLICIT tag
-    let _econtent_tag = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode eContent tag: {}", e)))?;
-
-    // Read OCTET STRING wrapper
-    let _octet_string_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode OCTET STRING: {}", e)))?;
-
-    // Now we're at TSTInfo SEQUENCE
-    let _tst_info_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode TSTInfo: {}", e)))?;
-
-    // Skip version INTEGER
-    let tst_version_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode TSTInfo version: {}", e)))?;
-    reader
-        .read_slice(tst_version_header.length)
-        .map_err(|e| Error::Parse(format!("failed to skip TSTInfo version: {}", e)))?;
-
-    // Skip policy OID
-    let policy_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode policy: {}", e)))?;
-    reader
-        .read_slice(policy_header.length)
-        .map_err(|e| Error::Parse(format!("failed to skip policy: {}", e)))?;
-
-    // Skip messageImprint SEQUENCE
-    let msg_imprint_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode messageImprint: {}", e)))?;
-    reader
-        .read_slice(msg_imprint_header.length)
-        .map_err(|e| Error::Parse(format!("failed to skip messageImprint: {}", e)))?;
-
-    // Skip serialNumber INTEGER
-    let serial_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode serialNumber: {}", e)))?;
-    reader
-        .read_slice(serial_header.length)
-        .map_err(|e| Error::Parse(format!("failed to skip serialNumber: {}", e)))?;
-
-    // Read genTime (GeneralizedTime)
-    let gentime_header = x509_cert::der::Header::decode(&mut reader)
-        .map_err(|e| Error::Parse(format!("failed to decode genTime: {}", e)))?;
-
-    let gentime_len: usize = gentime_header
-        .length
-        .try_into()
-        .map_err(|_| Error::Parse("invalid genTime length".to_string()))?;
-
-    let gentime_bytes = reader
-        .read_slice(
-            gentime_len
-                .try_into()
-                .map_err(|_| Error::Parse("failed to convert genTime length".to_string()))?,
-        )
-        .map_err(|e| Error::Parse(format!("failed to read genTime: {}", e)))?;
-
-    // Parse GeneralizedTime (format: YYYYMMDDHHMMSSZ or with fractional seconds)
-    let gentime_str = std::str::from_utf8(gentime_bytes)
-        .map_err(|e| Error::Parse(format!("invalid genTime UTF-8: {}", e)))?;
-
-    // Parse the timestamp using our utility function
-    parse_generalized_time(gentime_str)
+    Ok(unix_duration.as_secs() as i64)
 }
 
 /// Parse a GeneralizedTime string to Unix timestamp
 ///
+/// This function is provided for compatibility but is generally not needed
+/// when using the proper DER parsing approach, which handles GeneralizedTime
+/// conversion automatically.
+///
 /// Format: YYYYMMDDHHMMSSz or YYYYMMDDHHMMSS.fffZ
+#[deprecated(
+    since = "0.1.0",
+    note = "Use TstInfo::gen_time.to_system_time() instead when parsing DER-encoded timestamps"
+)]
 pub fn parse_generalized_time(time_str: &str) -> Result<i64> {
     // Remove trailing 'Z' if present
     let time_str = time_str.trim_end_matches('Z').trim_end_matches('z');
@@ -220,6 +203,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(deprecated)]
     fn test_parse_generalized_time() {
         // Standard format
         let result = parse_generalized_time("20231215120000Z");
@@ -235,6 +219,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_parse_generalized_time_invalid() {
         // Too short
         let result = parse_generalized_time("2023");

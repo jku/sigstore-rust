@@ -5,7 +5,7 @@ use base64::Engine;
 use chrono::{DateTime, Utc};
 use rustls_pki_types::CertificateDer;
 use serde::{Deserialize, Serialize};
-use sigstore_types::LogKeyId;
+use sigstore_types::{Base64Der, LogKeyId};
 use std::collections::HashMap;
 
 /// TSA certificate with optional validity period (start, end)
@@ -116,7 +116,7 @@ pub struct TimestampAuthority {
 #[serde(rename_all = "camelCase")]
 pub struct PublicKey {
     /// Raw bytes of the public key (base64 encoded)
-    pub raw_bytes: String,
+    pub raw_bytes: Base64Der,
 
     /// Key details/type
     pub key_details: String,
@@ -160,7 +160,7 @@ pub struct CertChain {
 #[serde(rename_all = "camelCase")]
 pub struct CertificateEntry {
     /// Raw bytes of the certificate (base64 encoded DER)
-    pub raw_bytes: String,
+    pub raw_bytes: Base64Der,
 }
 
 /// Validity period for a key or certificate
@@ -194,8 +194,7 @@ impl TrustedRoot {
         let mut certs = Vec::new();
         for ca in &self.certificate_authorities {
             for cert_entry in &ca.cert_chain.certificates {
-                let cert_der =
-                    base64::engine::general_purpose::STANDARD.decode(&cert_entry.raw_bytes)?;
+                let cert_der = cert_entry.raw_bytes.decode()?;
                 certs.push(CertificateDer::from(cert_der));
             }
         }
@@ -206,8 +205,7 @@ impl TrustedRoot {
     pub fn rekor_keys(&self) -> Result<HashMap<String, Vec<u8>>> {
         let mut keys = HashMap::new();
         for tlog in &self.tlogs {
-            let key_bytes =
-                base64::engine::general_purpose::STANDARD.decode(&tlog.public_key.raw_bytes)?;
+            let key_bytes = tlog.public_key.raw_bytes.decode()?;
             keys.insert(tlog.log_id.key_id.to_string(), key_bytes);
         }
         Ok(keys)
@@ -220,8 +218,7 @@ impl TrustedRoot {
     pub fn rekor_keys_with_hints(&self) -> Result<Vec<([u8; 4], Vec<u8>)>> {
         let mut keys = Vec::new();
         for tlog in &self.tlogs {
-            let key_bytes =
-                base64::engine::general_purpose::STANDARD.decode(&tlog.public_key.raw_bytes)?;
+            let key_bytes = tlog.public_key.raw_bytes.decode()?;
 
             // Decode the key_id to get the key hint (first 4 bytes)
             let key_id_bytes =
@@ -244,9 +241,7 @@ impl TrustedRoot {
     pub fn rekor_key_for_log(&self, log_id: &LogKeyId) -> Result<Vec<u8>> {
         for tlog in &self.tlogs {
             if &tlog.log_id.key_id == log_id {
-                return Ok(
-                    base64::engine::general_purpose::STANDARD.decode(&tlog.public_key.raw_bytes)?
-                );
+                return Ok(tlog.public_key.raw_bytes.decode()?);
             }
         }
         Err(Error::KeyNotFound(log_id.to_string()))
@@ -256,8 +251,7 @@ impl TrustedRoot {
     pub fn ctfe_keys(&self) -> Result<HashMap<LogKeyId, Vec<u8>>> {
         let mut keys = HashMap::new();
         for ctlog in &self.ctlogs {
-            let key_bytes =
-                base64::engine::general_purpose::STANDARD.decode(&ctlog.public_key.raw_bytes)?;
+            let key_bytes = ctlog.public_key.raw_bytes.decode()?;
             keys.insert(ctlog.log_id.key_id.clone(), key_bytes);
         }
         Ok(keys)
@@ -269,8 +263,7 @@ impl TrustedRoot {
 
         for tsa in &self.timestamp_authorities {
             for cert_entry in &tsa.cert_chain.certificates {
-                let cert_der =
-                    base64::engine::general_purpose::STANDARD.decode(&cert_entry.raw_bytes)?;
+                let cert_der = cert_entry.raw_bytes.decode()?;
 
                 // Parse validity period
                 let (start, end) = if let Some(valid_for) = &tsa.valid_for {
@@ -302,8 +295,7 @@ impl TrustedRoot {
         for tsa in &self.timestamp_authorities {
             // The last certificate in the chain is typically the root
             if let Some(cert_entry) = tsa.cert_chain.certificates.last() {
-                let cert_der =
-                    base64::engine::general_purpose::STANDARD.decode(&cert_entry.raw_bytes)?;
+                let cert_der = cert_entry.raw_bytes.decode()?;
                 roots.push(CertificateDer::from(cert_der));
             }
         }
@@ -318,8 +310,7 @@ impl TrustedRoot {
             let chain_len = tsa.cert_chain.certificates.len();
             if chain_len > 2 {
                 for cert_entry in &tsa.cert_chain.certificates[1..chain_len - 1] {
-                    let cert_der =
-                        base64::engine::general_purpose::STANDARD.decode(&cert_entry.raw_bytes)?;
+                    let cert_der = cert_entry.raw_bytes.decode()?;
                     intermediates.push(CertificateDer::from(cert_der));
                 }
             }
@@ -334,8 +325,7 @@ impl TrustedRoot {
         for tsa in &self.timestamp_authorities {
             // The first certificate in the chain is the leaf (TSA signing cert)
             if let Some(cert_entry) = tsa.cert_chain.certificates.first() {
-                let cert_der =
-                    base64::engine::general_purpose::STANDARD.decode(&cert_entry.raw_bytes)?;
+                let cert_der = cert_entry.raw_bytes.decode()?;
                 leaves.push(CertificateDer::from(cert_der));
             }
         }

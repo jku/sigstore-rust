@@ -216,8 +216,7 @@ fn test_inclusion_proof_verification() {
     let proof = entry.inclusion_proof.as_ref().unwrap();
 
     // Decode the canonicalized body
-    use base64::{engine::general_purpose::STANDARD, Engine};
-    let body = STANDARD.decode(&entry.canonicalized_body).unwrap();
+    let body = entry.canonicalized_body.decode().unwrap();
 
     // Hash the leaf
     let leaf_hash = hash_leaf(&body);
@@ -226,11 +225,11 @@ fn test_inclusion_proof_verification() {
     let proof_hashes: Vec<Sha256Hash> = proof
         .hashes
         .iter()
-        .map(|h| Sha256Hash::from_base64(h).unwrap())
+        .map(|h| Sha256Hash::from_base64_ref(h).unwrap())
         .collect();
 
     // Decode root hash
-    let root_hash = Sha256Hash::from_base64(&proof.root_hash).unwrap();
+    let root_hash = Sha256Hash::from_base64_ref(&proof.root_hash).unwrap();
 
     // Verify the inclusion proof
     let leaf_index: u64 = proof.log_index.as_u64().unwrap();
