@@ -3,8 +3,8 @@
 use crate::error::{Error, Result};
 use crate::signing::SigningScheme;
 use aws_lc_rs::signature::{
-    UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1, ECDSA_P384_SHA384_ASN1, ED25519,
-    RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
+    UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1, ECDSA_P384_SHA384_ASN1,
+    ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
     RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
 };
 
@@ -27,18 +27,21 @@ impl VerificationKey {
         match self.scheme {
             SigningScheme::EcdsaP256Sha256 => {
                 let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &self.bytes);
-                key.verify(data, signature)
-                    .map_err(|_| Error::Verification("ECDSA P-256 SHA-256 signature invalid".to_string()))
+                key.verify(data, signature).map_err(|_| {
+                    Error::Verification("ECDSA P-256 SHA-256 signature invalid".to_string())
+                })
             }
             SigningScheme::EcdsaP256Sha384 => {
                 let key = UnparsedPublicKey::new(&ECDSA_P256_SHA384_ASN1, &self.bytes);
-                key.verify(data, signature)
-                    .map_err(|_| Error::Verification("ECDSA P-256 SHA-384 signature invalid".to_string()))
+                key.verify(data, signature).map_err(|_| {
+                    Error::Verification("ECDSA P-256 SHA-384 signature invalid".to_string())
+                })
             }
             SigningScheme::EcdsaP384Sha384 => {
                 let key = UnparsedPublicKey::new(&ECDSA_P384_SHA384_ASN1, &self.bytes);
-                key.verify(data, signature)
-                    .map_err(|_| Error::Verification("ECDSA P-384 SHA-384 signature invalid".to_string()))
+                key.verify(data, signature).map_err(|_| {
+                    Error::Verification("ECDSA P-384 SHA-384 signature invalid".to_string())
+                })
             }
             SigningScheme::Ed25519 => {
                 let key = UnparsedPublicKey::new(&ED25519, &self.bytes);
@@ -100,52 +103,64 @@ pub fn verify_signature(
 ///
 /// This is used for hashedrekord verification where the signature is over
 /// the SHA-256 hash of the artifact, not the artifact itself.
+///
+/// The digest parameter should contain the pre-computed hash bytes.
 pub fn verify_signature_prehashed(
     public_key: &[u8],
-    digest: &[u8],
+    digest_bytes: &[u8],
     signature: &[u8],
     scheme: SigningScheme,
 ) -> Result<()> {
-    use aws_lc_rs::signature::{
-        UnparsedPublicKey, ECDSA_P256_SHA256_FIXED, ECDSA_P384_SHA384_FIXED,
-    };
+    use aws_lc_rs::digest::{Digest, SHA256, SHA384};
 
     match scheme {
         SigningScheme::EcdsaP256Sha256 => {
-            // For prehashed ECDSA, we need to use the FIXED variant which doesn't hash
+            // For prehashed ECDSA, we need to use verify_digest with a Digest
             // The digest should be 32 bytes (SHA-256)
-            if digest.len() != 32 {
+            if digest_bytes.len() != 32 {
                 return Err(Error::Verification(format!(
                     "ECDSA P-256 prehashed verification requires 32-byte digest, got {}",
-                    digest.len()
+                    digest_bytes.len()
                 )));
             }
-            let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_FIXED, public_key);
-            key.verify(digest, signature)
+
+            // Import the pre-computed hash as a Digest
+            let digest = Digest::import_less_safe(digest_bytes, &SHA256)
+                .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
+
+            // Use verify_digest with ASN1 algorithm (for DER-encoded signatures)
+            let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, public_key);
+            key.verify_digest(&digest, signature)
                 .map_err(|_| Error::Verification("ECDSA P-256 signature invalid".to_string()))
         }
         SigningScheme::EcdsaP384Sha384 => {
             // For prehashed ECDSA P-384, digest should be 48 bytes (SHA-384)
-            if digest.len() != 48 {
+            if digest_bytes.len() != 48 {
                 return Err(Error::Verification(format!(
                     "ECDSA P-384 prehashed verification requires 48-byte digest, got {}",
-                    digest.len()
+                    digest_bytes.len()
                 )));
             }
-            let key = UnparsedPublicKey::new(&ECDSA_P384_SHA384_FIXED, public_key);
-            key.verify(digest, signature)
+
+            // Import the pre-computed hash as a Digest
+            let digest = Digest::import_less_safe(digest_bytes, &SHA384)
+                .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
+
+            // Use verify_digest with ASN1 algorithm (for DER-encoded signatures)
+            let key = UnparsedPublicKey::new(&ECDSA_P384_SHA384_ASN1, public_key);
+            key.verify_digest(&digest, signature)
                 .map_err(|_| Error::Verification("ECDSA P-384 signature invalid".to_string()))
         }
         SigningScheme::Ed25519 => {
             // Ed25519 doesn't support prehashed mode in the same way
             // The signature is over the full message, not a hash
             // Fall back to regular verification
-            verify_signature(public_key, digest, signature, scheme)
+            verify_signature(public_key, digest_bytes, signature, scheme)
         }
         _ => {
             // For other schemes (RSA), use regular verification
             // RSA schemes in Sigstore typically sign the full message
-            verify_signature(public_key, digest, signature, scheme)
+            verify_signature(public_key, digest_bytes, signature, scheme)
         }
     }
 }

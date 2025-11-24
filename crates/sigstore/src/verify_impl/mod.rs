@@ -6,6 +6,7 @@
 pub(super) mod hashedrekord;
 pub(super) mod helpers;
 pub(super) mod rekor;
+pub(super) mod sct;
 pub(super) mod tlog;
 
 // Re-export for use within parent verify.rs

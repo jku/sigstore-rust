@@ -305,16 +305,25 @@ pub fn verify_certificate_chain(
                 // Map (curve, hash) to SigningScheme
                 let scheme = match (curve_oid.as_str(), sig_alg_oid) {
                     // P-256 with SHA-256
-                    ("1.2.840.10045.3.1.7", oid) if oid == const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2") => {
+                    ("1.2.840.10045.3.1.7", oid)
+                        if oid
+                            == const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.2") =>
+                    {
                         sigstore_crypto::SigningScheme::EcdsaP256Sha256
                     }
                     // P-256 with SHA-384 (non-standard but valid)
                     // Some test/mock certificates may use this combination
-                    ("1.2.840.10045.3.1.7", oid) if oid == const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.3") => {
+                    ("1.2.840.10045.3.1.7", oid)
+                        if oid
+                            == const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.3") =>
+                    {
                         sigstore_crypto::SigningScheme::EcdsaP256Sha384
                     }
                     // P-384 with SHA-384
-                    ("1.3.132.0.34", oid) if oid == const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.3") => {
+                    ("1.3.132.0.34", oid)
+                        if oid
+                            == const_oid::ObjectIdentifier::new_unwrap("1.2.840.10045.4.3.3") =>
+                    {
                         sigstore_crypto::SigningScheme::EcdsaP384Sha384
                     }
                     _ => continue,
@@ -324,7 +333,9 @@ pub fn verify_certificate_chain(
                     continue;
                 };
 
-                if sigstore_crypto::verify_signature(issuer_pub_key, &tbs_der, signature, scheme).is_ok() {
+                if sigstore_crypto::verify_signature(issuer_pub_key, &tbs_der, signature, scheme)
+                    .is_ok()
+                {
                     found_issuer = true;
                     break;
                 }
@@ -359,12 +370,15 @@ fn extract_ec_curve_oid(spki: &x509_cert::spki::SubjectPublicKeyInfoOwned) -> Re
 
     // The parameters field contains the curve OID
     let Some(params) = &spki.algorithm.parameters else {
-        return Err(Error::Verification("EC public key missing curve parameters".to_string()));
+        return Err(Error::Verification(
+            "EC public key missing curve parameters".to_string(),
+        ));
     };
 
     // The parameters are an ANY type that encodes a complete DER-encoded OID
     // We can directly decode it as an ObjectIdentifier since ANY preserves the DER encoding
-    let params_der = params.to_der()
+    let params_der = params
+        .to_der()
         .map_err(|e| Error::Verification(format!("failed to encode parameters: {}", e)))?;
 
     let curve_oid = const_oid::ObjectIdentifier::from_der(&params_der)
@@ -395,7 +409,8 @@ fn extract_tbs_der(cert_der: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| Error::Verification(format!("failed to decode certificate header: {}", e)))?;
 
     // The remaining bytes should be the certificate contents
-    let cert_contents = reader.read_slice(outer_header.length)
+    let cert_contents = reader
+        .read_slice(outer_header.length)
         .map_err(|e| Error::Verification(format!("failed to read certificate contents: {}", e)))?;
 
     // Now decode the TBS header from the certificate contents
@@ -406,20 +421,26 @@ fn extract_tbs_der(cert_der: &[u8]) -> Result<Vec<u8>> {
         .map_err(|e| Error::Verification(format!("failed to decode TBS header: {}", e)))?;
 
     // Calculate the total length of the TBS including its header
-    let header_len: usize = tbs_header.encoded_len()
+    let header_len: usize = tbs_header
+        .encoded_len()
         .map_err(|e| Error::Verification(format!("failed to encode TBS header length: {}", e)))?
         .try_into()
         .map_err(|_| Error::Verification("TBS header length too large".to_string()))?;
 
-    let body_len: usize = tbs_header.length.try_into()
+    let body_len: usize = tbs_header
+        .length
+        .try_into()
         .map_err(|_| Error::Verification("TBS body length too large".to_string()))?;
 
-    let tbs_total_len = header_len.checked_add(body_len)
+    let tbs_total_len = header_len
+        .checked_add(body_len)
         .ok_or_else(|| Error::Verification("TBS length calculation overflow".to_string()))?;
 
     // Extract the TBS bytes (header + body)
     if tbs_total_len > cert_contents.len() {
-        return Err(Error::Verification("TBS length exceeds certificate contents".to_string()));
+        return Err(Error::Verification(
+            "TBS length exceeds certificate contents".to_string(),
+        ));
     }
 
     Ok(cert_contents[..tbs_total_len].to_vec())
@@ -430,15 +451,12 @@ fn extract_tbs_der(cert_der: &[u8]) -> Result<Vec<u8>> {
 /// SCTs provide proof that the certificate was submitted to a Certificate
 /// Transparency log. This is a key part of Sigstore's security model.
 ///
-/// CRITICAL: Embedded SCTs sign the Pre-Certificate, not the final certificate.
-/// We must reconstruct the Pre-Certificate TBS by removing the SCT extension.
+/// This function uses the x509-cert crate's built-in SCT parsing and tls_codec
+/// for proper RFC 6962 compliant verification.
 pub fn verify_sct(
     verification_material: &VerificationMaterialContent,
-    trusted_root: Option<&TrustedRoot>
+    trusted_root: Option<&TrustedRoot>,
 ) -> Result<()> {
-    use x509_cert::der::Decode;
-    use x509_cert::Certificate;
-
     // If no trusted root is provided, skip SCT verification
     let Some(root) = trusted_root else {
         return Ok(());
@@ -447,287 +465,72 @@ pub fn verify_sct(
     // Extract certificate for verification
     let cert_der = extract_certificate_der(verification_material)?;
 
-    // Parse the certificate to access extensions
-    let cert = Certificate::from_der(&cert_der)
-        .map_err(|e| Error::Verification(format!("failed to parse certificate: {}", e)))?;
+    // Get issuer SPKI for calculating the issuer key hash
+    let issuer_spki_der = get_issuer_spki(verification_material, &cert_der, trusted_root)?;
 
-    // Look for the SCT extension (OID 1.3.6.1.4.1.11129.2.4.2)
-    let extensions = cert
-        .tbs_certificate
-        .extensions
-        .as_ref()
-        .ok_or_else(|| Error::Verification("certificate has no extensions".to_string()))?;
+    // Delegate to the new sct module for verification
+    super::sct::verify_sct(&cert_der, &issuer_spki_der, root)
+}
 
-    let Some(sct_extension) = extensions
-        .iter()
-        .find(|ext| ext.extn_id == const_oid::db::rfc6962::CT_PRECERT_SCTS)
-    else {
-        return Err(Error::Verification(
-            "certificate is missing SCT extension (Signed Certificate Timestamp)".to_string(),
-        ));
-    };
+/// Get the issuer's SubjectPublicKeyInfo DER bytes
+///
+/// This tries to find the issuer certificate in the verification material chain
+/// or in the trusted root, and returns its SPKI for SCT verification.
+fn get_issuer_spki(
+    verification_material: &VerificationMaterialContent,
+    cert_der: &[u8],
+    trusted_root: Option<&TrustedRoot>,
+) -> Result<Vec<u8>> {
+    use x509_cert::der::{Decode, Encode};
+    use x509_cert::Certificate;
 
-    // Get CT log keys from trusted root with their IDs
-    let ct_keys = root
-        .ctfe_keys_with_ids()
-        .map_err(|e| Error::Verification(format!("failed to get CT log keys: {}", e)))?;
-
-    if ct_keys.is_empty() {
-        return Err(Error::Verification(
-            "no CT log keys in trusted root".to_string(),
-        ));
+    // 1. Try to get from chain in verification material
+    if let VerificationMaterialContent::X509CertificateChain { certificates } =
+        verification_material
+    {
+        if certificates.len() > 1 {
+            let issuer_der = certificates[1].raw_bytes.decode().map_err(|e| {
+                Error::Verification(format!("failed to decode issuer certificate: {}", e))
+            })?;
+            let issuer_cert = Certificate::from_der(&issuer_der).map_err(|e| {
+                Error::Verification(format!("failed to parse issuer certificate: {}", e))
+            })?;
+            return issuer_cert
+                .tbs_certificate
+                .subject_public_key_info
+                .to_der()
+                .map_err(|e| Error::Verification(format!("failed to encode issuer SPKI: {}", e)));
+        }
     }
 
-    // Parse the SCT list from the extension
-    // The extension value is a DER OCTET STRING containing the TLS-encoded SCT list
-    // We use OctetString::from_der to handle the ASN.1 OCTET STRING decoding safely
-    use x509_cert::der::asn1::OctetString;
-    let sct_list_octet = OctetString::from_der(sct_extension.extn_value.as_bytes())
-        .map_err(|e| Error::Verification(format!("failed to decode SCT extension octet string: {}", e)))?;
-    let sct_list_bytes = sct_list_octet.as_bytes();
+    // 2. Try to find in trusted root
+    if let Some(root) = trusted_root {
+        let cert = Certificate::from_der(cert_der)
+            .map_err(|e| Error::Verification(format!("failed to parse certificate: {}", e)))?;
+        let issuer_name = cert.tbs_certificate.issuer;
 
-    // Prepare the Pre-Certificate TBS for verification
-    // CRITICAL: Embedded SCTs sign the PreCert, not the final Cert.
-    // We must remove the SCT extension to reconstruct what was signed.
-    let precert_tbs_der = create_precert_tbs(&cert, sct_extension)?;
+        let fulcio_certs = root
+            .fulcio_certs()
+            .map_err(|e| Error::Verification(format!("failed to get Fulcio certs: {}", e)))?;
 
-    // Get issuer key hash
-    let issuer_key_hash = get_issuer_key_hash(&cert_der, verification_material, trusted_root)?;
-
-    // Parse the TLS-encoded SCT list manually (2-byte length + SCTs)
-    if sct_list_bytes.len() < 2 {
-        return Err(Error::Verification("SCT list too short".to_string()));
-    }
-
-    let list_len = u16::from_be_bytes([sct_list_bytes[0], sct_list_bytes[1]]) as usize;
-    if sct_list_bytes.len() < 2 + list_len {
-        return Err(Error::Verification(format!(
-            "SCT list length mismatch: header says {} bytes, have {} bytes total",
-            list_len, sct_list_bytes.len() - 2
-        )));
-    }
-
-    let scts_data = &sct_list_bytes[2..2 + list_len];
-
-    // Iterate through individual SCTs
-    let mut verified_any = false;
-    let mut pos = 0;
-
-    while pos < scts_data.len() {
-        if pos + 2 > scts_data.len() {
-            break;
-        }
-
-        let sct_len = u16::from_be_bytes([scts_data[pos], scts_data[pos + 1]]) as usize;
-        pos += 2;
-
-        if pos + sct_len > scts_data.len() {
-            return Err(Error::Verification("SCT length overflow".to_string()));
-        }
-
-        let sct_bytes = &scts_data[pos..pos + sct_len];
-        pos += sct_len;
-
-        // Extract Log ID from SCT to find the correct key
-        // SCT structure: Version (1) + LogID (32) + ...
-        if sct_bytes.len() < 33 {
-            continue;
-        }
-        let sct_log_id = &sct_bytes[1..33];
-
-        // Find the matching key in trusted root
-        if let Some((_, public_key)) = ct_keys.iter().find(|(id, _)| id == sct_log_id) {
-            match verify_single_sct(sct_bytes, &precert_tbs_der, &issuer_key_hash, sct_log_id, public_key) {
-                Ok(_) => {
-                    verified_any = true;
-                }
-                Err(_e) => {
-                    // Verification failed for this specific SCT against the matching key.
-                    // We continue to see if other SCTs verify.
+        for ca_der in fulcio_certs {
+            if let Ok(ca_cert) = Certificate::from_der(&ca_der) {
+                if ca_cert.tbs_certificate.subject == issuer_name {
+                    return ca_cert
+                        .tbs_certificate
+                        .subject_public_key_info
+                        .to_der()
+                        .map_err(|e| {
+                            Error::Verification(format!("failed to encode issuer SPKI: {}", e))
+                        });
                 }
             }
-        } else {
-            // Log ID not found in trusted root
-            // This is common if the bundle contains SCTs from logs not in our trusted root
-            // We just ignore them and hope another SCT verifies
-        }
-
-        if verified_any {
-            break;
         }
     }
 
-    if !verified_any {
-        return Err(Error::Verification(
-            "no valid SCT could be verified against trusted CT logs".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-/// Reconstructs the Pre-Certificate TBS data by removing the SCT extension
-///
-/// CRITICAL: The CT Log signs the Pre-Certificate, which is the certificate
-/// without the SCT extension. We must remove it to reconstruct what was signed.
-fn create_precert_tbs(
-    cert: &x509_cert::Certificate,
-    sct_ext_to_remove: &x509_cert::ext::Extension,
-) -> Result<Vec<u8>> {
-    let mut tbs = cert.tbs_certificate.clone();
-
-    // Filter out the SCT extension (OID 1.3.6.1.4.1.11129.2.4.2)
-    if let Some(exts) = tbs.extensions.as_mut() {
-        let initial_len = exts.len();
-        exts.retain(|ext| ext.extn_id != sct_ext_to_remove.extn_id);
-
-        // Also remove the "Poison" extension if present (OID 1.3.6.1.4.1.11129.2.4.3)
-        // This marks a precertificate, and the Log strips it before signing
-        let poison_oid = const_oid::ObjectIdentifier::new_unwrap("1.3.6.1.4.1.11129.2.4.3");
-        exts.retain(|ext| ext.extn_id != poison_oid);
-
-        if exts.is_empty() && initial_len > 0 {
-            tbs.extensions = None;
-        }
-    }
-
-    tbs.to_der()
-        .map_err(|e| Error::Verification(format!("failed to serialize precert TBS: {}", e)))
-}
-
-/// Verify a single SCT against the Pre-Certificate
-///
-/// This parses the raw SCT bytes and verifies the signature according to RFC 6962.
-fn verify_single_sct(
-    sct_bytes: &[u8],
-    precert_tbs: &[u8],
-    issuer_key_hash: &[u8],
-    expected_log_id: &[u8],
-    public_key: &[u8],
-) -> Result<()> {
-    use sigstore_crypto::{verify_signature, SigningScheme};
-
-    // Parse SCT structure (RFC 6962 Section 3.2)
-    // Minimum: 1 (version) + 32 (log_id) + 8 (timestamp) + 2 (extensions_len) = 43 bytes
-    if sct_bytes.len() < 43 {
-        return Err(Error::Verification("SCT too short".to_string()));
-    }
-
-    let version = sct_bytes[0];
-    if version != 0 {
-        return Err(Error::Verification(format!(
-            "unsupported SCT version: {}",
-            version
-        )));
-    }
-
-    let log_id = &sct_bytes[1..33];
-    if log_id != expected_log_id {
-        return Err(Error::Verification("SCT log ID mismatch".to_string()));
-    }
-
-    let timestamp_bytes = &sct_bytes[33..41];
-    // We don't strictly need to parse the timestamp for verification, but we can
-    let _timestamp = u64::from_be_bytes([
-        timestamp_bytes[0],
-        timestamp_bytes[1],
-        timestamp_bytes[2],
-        timestamp_bytes[3],
-        timestamp_bytes[4],
-        timestamp_bytes[5],
-        timestamp_bytes[6],
-        timestamp_bytes[7],
-    ]);
-
-    let extensions_len = u16::from_be_bytes([sct_bytes[41], sct_bytes[42]]) as usize;
-    if sct_bytes.len() < 43 + extensions_len {
-        return Err(Error::Verification("SCT extensions overflow".to_string()));
-    }
-
-    let extensions = &sct_bytes[43..43 + extensions_len];
-
-    // The signature starts after extensions
-    let sig_start = 43 + extensions_len;
-    if sct_bytes.len() < sig_start + 4 {
-        return Err(Error::Verification("SCT signature missing".to_string()));
-    }
-
-    // Signature format: 1 byte hash algo + 1 byte sig algo + 2 bytes sig length + signature
-    let hash_algo = sct_bytes[sig_start];
-    let sig_algo = sct_bytes[sig_start + 1];
-    let sig_len = u16::from_be_bytes([sct_bytes[sig_start + 2], sct_bytes[sig_start + 3]]) as usize;
-
-    if sct_bytes.len() < sig_start + 4 + sig_len {
-        return Err(Error::Verification("SCT signature length mismatch".to_string()));
-    }
-
-    let signature = &sct_bytes[sig_start + 4..sig_start + 4 + sig_len];
-
-    // Construct the digitally signed data (RFC 6962 Section 3.2)
-    // CRITICAL: For embedded SCTs, this is signed over the Pre-Certificate (entry_type = 1)
-    let mut signed_data = Vec::new();
-
-    // Version (1 byte) - always 0 for v1
-    signed_data.push(version);
-
-    // SignatureType (1 byte) - CertificateTimestamp (0)
-    signed_data.push(0);
-
-    // Timestamp (8 bytes, big-endian)
-    signed_data.extend_from_slice(timestamp_bytes);
-
-    // LogEntryType (2 bytes) - PrecertEntry (1) for embedded SCTs
-    // CRITICAL FIX: This must be 1 (PrecertEntry), not 0 (X509Entry)
-    signed_data.extend_from_slice(&[0, 1]);
-
-    // PreCert structure:
-    // issuer_key_hash (32 bytes)
-    if issuer_key_hash.len() != 32 {
-         return Err(Error::Verification("issuer key hash must be 32 bytes".to_string()));
-    }
-    signed_data.extend_from_slice(issuer_key_hash);
-
-    // PrecertEntry: 3-byte length prefix + TBS certificate (without SCT extension)
-    let tbs_len = precert_tbs.len();
-    signed_data.push(((tbs_len >> 16) & 0xFF) as u8);
-    signed_data.push(((tbs_len >> 8) & 0xFF) as u8);
-    signed_data.push((tbs_len & 0xFF) as u8);
-    signed_data.extend_from_slice(precert_tbs);
-
-    // Extensions (2-byte length + data)
-    signed_data.push(((extensions_len >> 8) & 0xFF) as u8);
-    signed_data.push((extensions_len & 0xFF) as u8);
-    signed_data.extend_from_slice(extensions);
-
-    // Determine signing scheme based on hash and signature algorithms
-    // RFC 5246 SignatureAndHashAlgorithm encoding:
-    // hash (1 byte) | signature (1 byte)
-    // For CT: hash=4 (SHA256), sig=3 (ECDSA) => 0x0403
-    //        hash=5 (SHA384), sig=3 (ECDSA) => 0x0503
-    let scheme = match (hash_algo, sig_algo) {
-        (4, 3) => SigningScheme::EcdsaP256Sha256,  // SHA-256 with ECDSA
-        (5, 3) => SigningScheme::EcdsaP384Sha384,  // SHA-384 with ECDSA
-        _ => {
-            return Err(Error::Verification(format!(
-                "unsupported SCT algorithm combination: hash={}, sig={}",
-                hash_algo, sig_algo
-            )))
-        }
-    };
-
-    // Verify the SCT signature
-    let result = verify_signature(public_key, &signed_data, signature, scheme)
-        .map_err(|e| Error::Verification(format!("SCT signature verification failed: {}", e)));
-    
-    if result.is_err() {
-        println!("SCT signature verification failed.");
-        println!("Log ID: {:x?}", log_id);
-        // println!("Signed Data (hex): {:x?}", signed_data);
-        // println!("Signature (hex): {:x?}", signature);
-        // println!("Public Key (hex): {:x?}", public_key);
-    }
-    
-    result
+    Err(Error::Verification(
+        "could not find issuer certificate for SCT verification".to_string(),
+    ))
 }
 
 /// Verify that the certificate conforms to the Sigstore X.509 profile
@@ -780,72 +583,13 @@ pub fn verify_x509_profile(cert_der: &[u8]) -> Result<()> {
 
     // Check for code signing OID (1.3.6.1.5.5.7.3.3)
     let code_signing_oid = const_oid::ObjectIdentifier::new_unwrap("1.3.6.1.5.5.7.3.3");
-    if !eku.0.iter().any(|oid| *oid == code_signing_oid) {
+    if !eku.0.contains(&code_signing_oid) {
         return Err(Error::Verification(
             "ExtendedKeyUsage extension does not contain codeSigning".to_string(),
         ));
     }
 
     Ok(())
-}
-
-/// Calculate the SPKI (Subject Public Key Info) hash for a certificate
-fn calculate_spki_hash(cert_der: &[u8]) -> Result<Vec<u8>> {
-    use x509_cert::der::{Decode, Encode};
-    use x509_cert::Certificate;
-    
-    let cert = Certificate::from_der(cert_der).map_err(|e| {
-        Error::Verification(format!("failed to parse certificate for SPKI hash: {}", e))
-    })?;
-    let spki_der = cert.tbs_certificate.subject_public_key_info.to_der().map_err(|e| {
-        Error::Verification(format!("failed to serialize SPKI: {}", e))
-    })?;
-    Ok(sigstore_crypto::sha256(&spki_der).to_vec())
-}
-
-/// Get the issuer key hash for SCT verification
-///
-/// This attempts to find the issuer's public key hash using the verification material
-/// and the trusted root.
-fn get_issuer_key_hash(
-    cert_der: &[u8],
-    verification_material: &VerificationMaterialContent,
-    trusted_root: Option<&TrustedRoot>
-) -> Result<Vec<u8>> {
-    use x509_cert::der::Decode;
-    use x509_cert::Certificate;
-
-    // 1. Try to get from chain in verification material
-    if let VerificationMaterialContent::X509CertificateChain { certificates } = verification_material {
-        if certificates.len() > 1 {
-            let issuer_der = certificates[1].raw_bytes.decode().map_err(|e| {
-                Error::Verification(format!("failed to decode issuer certificate: {}", e))
-            })?;
-            return calculate_spki_hash(&issuer_der);
-        }
-    }
-    
-    // 2. Try to find in trusted root
-    if let Some(root) = trusted_root {
-        let cert = Certificate::from_der(cert_der).map_err(|e| {
-            Error::Verification(format!("failed to parse certificate: {}", e))
-        })?;
-        let issuer_name = cert.tbs_certificate.issuer;
-        
-        let fulcio_certs = root.fulcio_certs().map_err(|e| {
-            Error::Verification(format!("failed to get Fulcio certs: {}", e))
-        })?;
-        
-        for ca_der in fulcio_certs {
-            if let Ok(ca_cert) = Certificate::from_der(&ca_der) {
-                if ca_cert.tbs_certificate.subject == issuer_name {
-                    return calculate_spki_hash(&ca_der);
-                }
-            }
-        }
-    }
-    
-    Err(Error::Verification("could not find issuer certificate for SCT verification".to_string()))
 }
 
 #[cfg(test)]
@@ -859,35 +603,40 @@ mod tests {
         // Certificate from sigstore-conformance/test/assets/bundle-verify/happy-path/bundle.sigstore.json
         // This certificate contains an embedded SCT
         let cert_base64 = "MIIIGTCCB5+gAwIBAgIUBPWs4OPN1kte0mUMGZrZ6ozMVRkwCgYIKoZIzj0EAwMwNzEVMBMGA1UEChMMc2lnc3RvcmUuZGV2MR4wHAYDVQQDExVzaWdzdG9yZS1pbnRlcm1lZGlhdGUwHhcNMjMwNzEyMTU1NjM1WhcNMjMwNzEyMTYwNjM1WjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVr33uVAPA1SpA5w/mmBF9ariW8E7oizIQKqiYfxwSb1zftqZZX045y3tPbRkIWe+t7MUYliQknQ954rDDEASnKOCBr4wgga6MA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUx2TNZkruHC2aCdyIXscI8N/8q2owHwYDVR0jBBgwFoAU39Ppz1YkEZb5qNjpKFWixi4YZD8wgaUGA1UdEQEB/wSBmjCBl4aBlGh0dHBzOi8vZ2l0aHViLmNvbS9zaWdzdG9yZS1jb25mb3JtYW5jZS9leHRyZW1lbHktZGFuZ2Vyb3VzLXB1YmxpYy1vaWRjLWJlYWNvbi8uZ2l0aHViL3dvcmtmbG93cy9leHRyZW1lbHktZGFuZ2Vyb3VzLW9pZGMtYmVhY29uLnltbEByZWZzL2hlYWRzL21haW4wOQYKKwYBBAGDvzABAQQraHR0cHM6Ly90b2tlbi5hY3Rpb25zLmdpdGh1YnVzZXJjb250ZW50LmNvbTAfBgorBgEEAYO/MAECBBF3b3JrZmxvd19kaXNwYXRjaDA2BgorBgEEAYO/MAEDBChhZjc4NWI2ZDNiMGZhMGMwYWExMzA1ZmFlZTdjZTYwMzZlOGQ5MGM0MC0GCisGAQQBg78wAQQEH0V4dHJlbWVseSBkYW5nZXJvdXMgT0lEQyBiZWFjb24wSQYKKwYBBAGDvzABBQQ7c2lnc3RvcmUtY29uZm9ybWFuY2UvZXh0cmVtZWx5LWRhbmdlcm91cy1wdWJsaWMtb2lkYy1iZWFjb24wHQYKKwYBBAGDvzABBgQPcmVmcy9oZWFkcy9tYWluMDsGCisGAQQBg78wAQgELQwraHR0cHM6Ly90b2tlbi5hY3Rpb25zLmdpdGh1YnVzZXJjb250ZW50LmNvbTCBpgYKKwYBBAGDvzABCQSBlwyBlGh0dHBzOi8vZ2l0aHViLmNvbS9zaWdzdG9yZS1jb25mb3JtYW5jZS9leHRyZW1lbHktZGFuZ2Vyb3VzLXB1YmxpYy1vaWRjLWJlYWNvbi8uZ2l0aHViL3dvcmtmbG93cy9leHRyZW1lbHktZGFuZ2Vyb3VzLW9pZGMtYmVhY29uLnltbEByZWZzL2hlYWRzL21haW4wOAYKKwYBBAGDvzABCgQqDChhZjc4NWI2ZDNiMGZhMGMwYWExMzA1ZmFlZTdjZTYwMzZlOGQ5MGM0MB0GCisGAQQBg78wAQsEDwwNZ2l0aHViLWhvc3RlZDBeBgorBgEEAYO/MAEMBFAMTmh0dHBzOi8vZ2l0aHViLmNvbS9zaWdzdG9yZS1jb25mb3JtYW5jZS9leHRyZW1lbHktZGFuZ2Vyb3VzLXB1YmxpYy1vaWRjLWJlYWNvbjA4BgorBgEEAYO/MAENBCoMKGFmNzg1YjZkM2IwZmEwYzBhYTEzMDVmYWVlN2NlNjAzNmU4ZDkwYzQwHwYKKwYBBAGDvzABDgQRDA9yZWZzL2hlYWRzL21haW4wGQYKKwYBBAGDvzABDwQLDAk2MzI1OTY4OTcwNwYKKwYBBAGDvzABEAQpDCdodHRwczovL2dpdGh1Yi5jb20vc2lnc3RvcmUtY29uZm9ybWFuY2UwGQYKKwYBBAGDvzABEQQLDAkxMzE4MDQ1NjMwgaYGCisGAQQBg78wARIEgZcMgZRodHRwczovL2dpdGh1Yi5jb20vc2lnc3RvcmUtY29uZm9ybWFuY2UvZXh0cmVtZWx5LWRhbmdlcm91cy1wdWJsaWMtb2lkYy1iZWFjb24vLmdpdGh1Yi93b3JrZmxvd3MvZXh0cmVtZWx5LWRhbmdlcm91cy1vaWRjLWJlYWNvbi55bWxAcmVmcy9oZWFkcy9tYWluMDgGCisGAQQBg78wARMEKgwoYWY3ODViNmQzYjBmYTBjMGFhMTMwNWZhZWU3Y2U2MDM2ZThkOTBjNDAhBgorBgEEAYO/MAEUBBMMEXdvcmtmbG93X2Rpc3BhdGNoMIGBBgorBgEEAYO/MAEVBHMMcWh0dHBzOi8vZ2l0aHViLmNvbS9zaWdzdG9yZS1jb25mb3JtYW5jZS9leHRyZW1lbHktZGFuZ2Vyb3VzLXB1YmxpYy1vaWRjLWJlYWNvbi9hY3Rpb25zL3J1bnMvNTUzMzc0MTQ5Ny9hdHRlbXB0cy8xMIGKBgorBgEEAdZ5AgQCBHwEegB4AHYA3T0wasbHETJjGR4cmWc3AqJKXrjePK3/h4pygC8p7o4AAAGJStGTCwAABAMARzBFAiBCA4jZQP4CwMiWoeS7WMW46QkI4e7OsNH3yVhf5wdBvgIhAPJYxdsi9NqOXVZsEUtCup8m1m/2zG39FTGlgE0MorDFMAoGCCqGSM49BAMDA2gAMGUCMEYWRwI5QJeOwNCuV4tnZ0n5QNlUlP0BtX5V2ZTQLqcQbWtneC7tLptiYgr0Z62UDQIxAO6ItXAH+sbZcsbj08xr3GApM6hjvyTAl39pS3Y3sZwAz8lfQDHNL4eALEo1heAYVg==";
-        
+
         use base64::Engine;
-        let cert_der = base64::engine::general_purpose::STANDARD.decode(cert_base64).expect("failed to decode cert");
+        let cert_der = base64::engine::general_purpose::STANDARD
+            .decode(cert_base64)
+            .expect("failed to decode cert");
 
         // --- Round-trip check ---
         let cert = x509_cert::Certificate::from_der(&cert_der).unwrap();
         let re_encoded_tbs = cert.tbs_certificate.to_der().unwrap();
-        
+
         let mut reader = SliceReader::new(&cert_der).unwrap();
         let outer_header = Header::decode(&mut reader).unwrap();
         let outer_body = reader.read_slice(outer_header.length).unwrap();
-        
+
         // Now decode TBS header from outer_body
         let mut tbs_reader = SliceReader::new(outer_body).unwrap();
         let tbs_header = Header::decode(&mut tbs_reader).unwrap();
         let tbs_total_len = (tbs_header.encoded_len().unwrap() + tbs_header.length).unwrap();
         let tbs_total_len_usize: usize = tbs_total_len.try_into().unwrap();
-        
+
         let original_tbs = &outer_body[..tbs_total_len_usize];
-        
+
         if original_tbs != re_encoded_tbs {
             println!("TBS round-trip FAILED!");
             println!("Original len: {}", original_tbs.len());
             println!("Re-encoded len: {}", re_encoded_tbs.len());
-            
+
             // Find first difference
             for (i, (a, b)) in original_tbs.iter().zip(re_encoded_tbs.iter()).enumerate() {
                 if a != b {
-                    println!("Difference at offset {}: original {:02x}, re-encoded {:02x}", i, a, b);
+                    println!(
+                        "Difference at offset {}: original {:02x}, re-encoded {:02x}",
+                        i, a, b
+                    );
                     break;
                 }
             }
@@ -956,7 +705,8 @@ mod tests {
             "timestampAuthorities": []
         }"#;
 
-        let trusted_root = TrustedRoot::from_json(trusted_root_json).expect("failed to parse trusted root");
+        let trusted_root =
+            TrustedRoot::from_json(trusted_root_json).expect("failed to parse trusted root");
 
         // Verify the SCT
         use sigstore_types::bundle::CertificateContent;
@@ -964,12 +714,17 @@ mod tests {
             raw_bytes: cert_base64.to_string().into(),
         });
         let result = verify_sct(&content, Some(&trusted_root));
-        assert!(result.is_ok(), "SCT verification failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "SCT verification failed: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn test_verify_sct_invalid_key() {
-        let trusted_root_json = include_str!("../../test_data/invalid-ct-key_fail/trusted_root.json");
+        let trusted_root_json =
+            include_str!("../../test_data/invalid-ct-key_fail/trusted_root.json");
         let bundle_json = include_str!("../../test_data/invalid-ct-key_fail/bundle.sigstore.json");
 
         let trusted_root = TrustedRoot::from_json(trusted_root_json).unwrap();
@@ -978,13 +733,17 @@ mod tests {
         // This should fail because the SCT key ID is not in the trusted root
         let result = verify_sct(&bundle.verification_material.content, Some(&trusted_root));
         assert!(result.is_err());
-        
+
         // Also verify that the certificate chain verification succeeds (since the chain itself is valid)
         let cert_der = extract_certificate_der(&bundle.verification_material.content).unwrap();
         // Use a time within the certificate validity period (2023-07-12 15:56:35 UTC to 2023-07-12 16:06:35 UTC)
-        let valid_time = 1689177500; 
+        let valid_time = 1689177500;
         let result_chain = verify_certificate_chain(&cert_der, valid_time, Some(&trusted_root));
-        assert!(result_chain.is_ok(), "Chain verification failed: {:?}", result_chain.err());
+        assert!(
+            result_chain.is_ok(),
+            "Chain verification failed: {:?}",
+            result_chain.err()
+        );
     }
 
     #[test]
@@ -1052,7 +811,8 @@ mod tests {
             "timestampAuthorities": []
         }"#;
 
-        let trusted_root = TrustedRoot::from_json(trusted_root_json).expect("failed to parse trusted root");
+        let trusted_root =
+            TrustedRoot::from_json(trusted_root_json).expect("failed to parse trusted root");
 
         // Verify the SCT
         use sigstore_types::bundle::CertificateContent;
@@ -1060,6 +820,9 @@ mod tests {
             raw_bytes: cert_base64.to_string().into(),
         });
         let result = verify_sct(&content, Some(&trusted_root));
-        assert!(result.is_err(), "SCT verification should fail due to signature mismatch");
+        assert!(
+            result.is_err(),
+            "SCT verification should fail due to signature mismatch"
+        );
     }
 }

@@ -82,17 +82,12 @@ fn verify_hashedrekord_entry(
     // Validate integrated time is within certificate validity (for v0.0.1)
     validate_integrated_time(entry, bundle)?;
 
-    // NOTE: For hashedrekord, step (7) cryptographic signature verification is not performed here.
-    // The signature consistency is verified in step (8) by comparing the signature in the bundle
-    // with the signature in the Rekor entry. This provides security through the transparency log's
-    // attestation that the signature was created by the holder of the private key corresponding
-    // to the certificate.
-    //
-    // TODO: Implement full cryptographic verification of the signature over the prehashed artifact.
-    // This requires either:
-    // 1. Using a lower-level crypto API that supports prehashed ECDSA verification with DER signatures
-    // 2. Or converting between signature formats (DER <-> raw r||s)
-    // See https://github.com/sigstore/sigstore-rs/issues/XXX
+    // Perform cryptographic signature verification
+    // This verifies that the signature in the Rekor entry was created by the
+    // certificate's private key over the artifact hash.
+    // Uses verify_signature_prehashed with Digest::import_less_safe for proper
+    // prehashed verification (avoiding double-hashing).
+    verify_signature_cryptographically(entry, &body, bundle, artifact, skip_artifact_hash)?;
 
     Ok(())
 }
@@ -251,6 +246,103 @@ fn validate_signature_match(
                     "signature in bundle does not match signature in Rekor entry".to_string(),
                 ));
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Perform cryptographic verification of the signature over the artifact hash
+fn verify_signature_cryptographically(
+    _entry: &TransparencyLogEntry,
+    body: &RekorEntryBody,
+    bundle: &Bundle,
+    _artifact: &[u8],
+    _skip_artifact_hash: bool,
+) -> Result<()> {
+    // Only verify for MessageSignature (not DSSE envelopes)
+    if let SignatureContent::MessageSignature(_) = &bundle.content {
+        // Extract the signature from Rekor
+        let signature_bytes = match body {
+            RekorEntryBody::HashedRekordV001(rekord) => {
+                rekord.spec.signature.content.decode().map_err(|e| {
+                    Error::Verification(format!("failed to decode signature: {}", e))
+                })?
+            }
+            RekorEntryBody::HashedRekordV002(rekord) => rekord
+                .spec
+                .hashed_rekord_v002
+                .signature
+                .content
+                .decode()
+                .map_err(|e| Error::Verification(format!("failed to decode signature: {}", e)))?,
+            _ => return Ok(()),
+        };
+
+        // Extract the artifact hash from Rekor entry
+        // The signature in a hashedrekord is over the hash of the artifact, not the artifact itself
+        let artifact_hash_from_rekor = match body {
+            RekorEntryBody::HashedRekordV001(rekord) => {
+                // v0.0.1: spec.data.hash.value (hex-encoded)
+                *Sha256Hash::from_hex(&rekord.spec.data.hash.value)
+                    .map_err(|e| {
+                        Error::Verification(format!(
+                            "invalid hash in Rekor entry for signature verification: {}",
+                            e
+                        ))
+                    })?
+                    .as_bytes()
+            }
+            RekorEntryBody::HashedRekordV002(rekord) => {
+                // v0.0.2: spec.hashedRekordV002.data.digest (base64-encoded)
+                *Sha256Hash::from_base64(rekord.spec.hashed_rekord_v002.data.digest.as_str())
+                    .map_err(|e| {
+                        Error::Verification(format!(
+                            "invalid digest in Rekor entry for signature verification: {}",
+                            e
+                        ))
+                    })?
+                    .as_bytes()
+            }
+            _ => return Ok(()),
+        };
+
+        // Get the certificate from the bundle
+        let bundle_cert_b64 = match &bundle.verification_material.content {
+            VerificationMaterialContent::X509CertificateChain { certificates } => {
+                certificates.first().map(|c| &c.raw_bytes)
+            }
+            VerificationMaterialContent::Certificate(cert) => Some(&cert.raw_bytes),
+            _ => None,
+        };
+
+        if let Some(bundle_cert_b64) = bundle_cert_b64 {
+            // Decode certificate
+            let cert_der = base64::engine::general_purpose::STANDARD
+                .decode(bundle_cert_b64)
+                .map_err(|e| {
+                    Error::Verification(format!(
+                        "failed to decode certificate for signature verification: {}",
+                        e
+                    ))
+                })?;
+
+            // Parse certificate to extract public key and algorithm
+            let cert_info = sigstore_crypto::x509::parse_certificate_info(&cert_der)?;
+
+            // Verify the signature over the prehashed artifact
+            sigstore_crypto::verification::verify_signature_prehashed(
+                &cert_info.public_key_bytes,
+                &artifact_hash_from_rekor,
+                &signature_bytes,
+                cert_info.signing_scheme,
+            )
+            .map_err(|e| {
+                Error::Verification(format!(
+                    "cryptographic signature verification failed: {}",
+                    e
+                ))
+            })?;
         }
     }
 

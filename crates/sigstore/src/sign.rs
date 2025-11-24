@@ -150,7 +150,9 @@ impl Signer {
         let signature = key_pair.sign(artifact)?;
 
         // 4. Create Rekor entry
-        let (tlog_entry, _public_key_pem) = self.create_rekor_entry(artifact, &signature, &key_pair).await?;
+        let (tlog_entry, _public_key_pem) = self
+            .create_rekor_entry(artifact, &signature, &key_pair)
+            .await?;
 
         // 5. Get timestamp from TSA (optional)
         let timestamp_b64 = if let Some(tsa_url) = &self.tsa_url {
@@ -166,8 +168,9 @@ impl Signer {
     /// Generate an ephemeral key pair based on the configured signing scheme
     fn generate_ephemeral_keypair(&self) -> Result<KeyPair> {
         match self.signing_scheme {
-            SigningScheme::EcdsaP256Sha256 => KeyPair::generate_ecdsa_p256()
-                .map_err(|e| Error::Signing(format!("Failed to generate ECDSA P-256 key pair: {}", e))),
+            SigningScheme::EcdsaP256Sha256 => KeyPair::generate_ecdsa_p256().map_err(|e| {
+                Error::Signing(format!("Failed to generate ECDSA P-256 key pair: {}", e))
+            }),
             _ => Err(Error::Signing(format!(
                 "Signing scheme {:?} not yet supported",
                 self.signing_scheme
@@ -182,7 +185,8 @@ impl Signer {
         let subject = token_info.email().unwrap_or(token_info.subject());
 
         // Export public key to PEM
-        let public_key_pem = key_pair.public_key_to_pem()
+        let public_key_pem = key_pair
+            .public_key_to_pem()
             .map_err(|e| Error::Signing(format!("Failed to export public key: {}", e)))?;
 
         // Create proof of possession
@@ -196,7 +200,7 @@ impl Signer {
             .create_signing_certificate(
                 self.identity_token.raw(),
                 &public_key_pem,
-                &proof_of_possession
+                &proof_of_possession,
             )
             .await
             .map_err(|e| Error::Signing(format!("Failed to get certificate from Fulcio: {}", e)))?;
@@ -210,7 +214,7 @@ impl Signer {
             .certificate_chain()
             .ok_or_else(|| Error::Signing("No certificate chain in response".to_string()))?;
 
-        let chain_der_b64 = self.filter_ca_certificates(&chain_pem)?;
+        let chain_der_b64 = self.filter_ca_certificates(chain_pem)?;
 
         Ok((chain_der_b64, leaf_cert_pem.to_string()))
     }
@@ -268,7 +272,8 @@ impl Signer {
         let artifact_hash = Sha256Hash::from_bytes(hash_bytes);
 
         // Export public key for Rekor
-        let public_key_pem = key_pair.public_key_to_pem()
+        let public_key_pem = key_pair
+            .public_key_to_pem()
             .map_err(|e| Error::Signing(format!("Failed to export public key: {}", e)))?;
         let public_key_pem_obj = PublicKeyPem::new(public_key_pem.to_string());
 

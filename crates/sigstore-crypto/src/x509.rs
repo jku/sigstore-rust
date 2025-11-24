@@ -5,7 +5,7 @@
 
 use crate::error::{Error, Result};
 use crate::SigningScheme;
-use x509_cert::der::Decode;
+use x509_cert::der::{Decode, Encode};
 use x509_cert::Certificate;
 
 /// Information extracted from a certificate
@@ -44,19 +44,51 @@ pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
         .to_unix_duration()
         .as_secs() as i64;
 
-    // Extract public key
+    // Extract public key in SPKI (SubjectPublicKeyInfo) DER format
+    // This is required by aws-lc-rs UnparsedPublicKey, which expects the full SPKI,
+    // not just the raw key bytes
     let public_key_info = &cert.tbs_certificate.subject_public_key_info;
-    let public_key_bytes = public_key_info.subject_public_key.raw_bytes().to_vec();
+    let public_key_bytes = public_key_info
+        .to_der()
+        .map_err(|e| Error::InvalidCertificate(format!("failed to encode SPKI: {}", e)))?;
 
-    // Determine signing scheme from algorithm OID
+    // Determine signing scheme from algorithm OID and parameters
+    // Note: This is a best-effort attempt. For certificates used only for
+    // chain validation (not signature verification), we default to P-256.
     let signing_scheme = match public_key_info.algorithm.oid.to_string().as_str() {
-        "1.2.840.10045.2.1" => SigningScheme::EcdsaP256Sha256, // id-ecPublicKey
-        "1.3.101.112" => SigningScheme::Ed25519,               // id-Ed25519
-        oid => {
-            return Err(Error::InvalidCertificate(format!(
-                "unsupported key algorithm: {}",
-                oid
-            )))
+        "1.2.840.10045.2.1" => {
+            // id-ecPublicKey - need to check curve parameter
+            if let Some(params) = &public_key_info.algorithm.parameters {
+                use x509_cert::der::Decode;
+                // Try to decode the parameters as an OID
+                match const_oid::ObjectIdentifier::from_der(params.value()) {
+                    Ok(curve_oid) => match curve_oid.to_string().as_str() {
+                        "1.2.840.10045.3.1.7" => SigningScheme::EcdsaP256Sha256, // secp256r1 (P-256)
+                        "1.3.132.0.34" => SigningScheme::EcdsaP384Sha384, // secp384r1 (P-384)
+                        _ => {
+                            // Unknown EC curve - default to P-256 for compatibility
+                            SigningScheme::EcdsaP256Sha256
+                        }
+                    },
+                    Err(_) => {
+                        // Failed to parse curve OID - default to P-256 for compatibility
+                        SigningScheme::EcdsaP256Sha256
+                    }
+                }
+            } else {
+                // EC key missing curve parameters - default to P-256 for compatibility
+                SigningScheme::EcdsaP256Sha256
+            }
+        }
+        "1.2.840.113549.1.1.1" => {
+            // rsaEncryption - default to RSA PKCS#1 SHA-256
+            // We can't determine padding from the certificate alone
+            SigningScheme::RsaPkcs1Sha256
+        }
+        "1.3.101.112" => SigningScheme::Ed25519, // id-Ed25519
+        _ => {
+            // Unknown algorithm - default to P-256 for compatibility
+            SigningScheme::EcdsaP256Sha256
         }
     };
 
