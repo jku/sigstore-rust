@@ -9,14 +9,9 @@ use x509_cert::der::{Decode, Encode};
 use x509_cert::Certificate;
 
 // OID constants for algorithm identification
-use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1, SECP_384_R_1};
+use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1};
+use const_oid::db::rfc8410::ID_ED_25519;
 use const_oid::ObjectIdentifier;
-
-/// id-Ed25519: 1.3.101.112
-const ID_ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
-
-/// rsaEncryption: 1.2.840.113549.1.1.1
-const RSA_ENCRYPTION: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.113549.1.1.1");
 
 /// Fulcio issuer OID: 1.3.6.1.4.1.57264.1.1
 /// This extension contains the OIDC issuer URL
@@ -118,7 +113,7 @@ fn determine_signing_scheme(
         // RSA key - default to RSA PKCS#1 SHA-256
         // We can't determine padding from the certificate alone
         return Ok(SigningScheme::RsaPkcs1Sha256);
-    } else if alg_oid == ID_ED25519 {
+    } else if alg_oid == ID_ED_25519 {
         return Ok(SigningScheme::Ed25519);
     }
 

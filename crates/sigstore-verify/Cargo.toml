@@ -1,6 +1,6 @@
 [package]
-name = "sigstore"
-description = "High-level Sigstore signing and verification"
+name = "sigstore-verify"
+description = "Sigstore signature verification"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,12 +11,10 @@ rust-version.workspace = true
 sigstore-types = { path = "../sigstore-types" }
 sigstore-crypto = { path = "../sigstore-crypto" }
 sigstore-merkle = { path = "../sigstore-merkle" }
-sigstore-tsa = { path = "../sigstore-tsa" }
 sigstore-trust-root = { path = "../sigstore-trust-root" }
 sigstore-bundle = { path = "../sigstore-bundle" }
 sigstore-rekor = { path = "../sigstore-rekor" }
-sigstore-fulcio = { path = "../sigstore-fulcio" }
-sigstore-oidc = { path = "../sigstore-oidc" }
+sigstore-tsa = { path = "../sigstore-tsa" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_json_canonicalizer = { workspace = true }
@@ -38,8 +36,15 @@ hex = { workspace = true }
 base64 = { workspace = true }
 sha2 = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+sigstore-sign = { path = "../sigstore-sign" }
+sigstore-fulcio = { path = "../sigstore-fulcio" }
+sigstore-oidc = { path = "../sigstore-oidc" }
+
+[[example]]
+name = "conformance"
+required-features = []
 
 [features]
-default = ["rustls-tls"]
-rustls-tls = []
+default = []
 tuf = ["sigstore-trust-root/tuf"]

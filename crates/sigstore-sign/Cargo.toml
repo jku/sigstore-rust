@@ -1,0 +1,26 @@
+[package]
+name = "sigstore-sign"
+description = "Sigstore signature creation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+sigstore-types = { path = "../sigstore-types" }
+sigstore-crypto = { path = "../sigstore-crypto" }
+sigstore-bundle = { path = "../sigstore-bundle" }
+sigstore-rekor = { path = "../sigstore-rekor" }
+sigstore-fulcio = { path = "../sigstore-fulcio" }
+sigstore-oidc = { path = "../sigstore-oidc" }
+sigstore-tsa = { path = "../sigstore-tsa" }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+x509-cert = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[features]
+default = []

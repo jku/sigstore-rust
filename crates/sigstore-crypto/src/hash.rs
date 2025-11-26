@@ -20,6 +20,7 @@ pub fn sha384(data: &[u8]) -> [u8; 48] {
 
 /// Hash data using SHA-512
 pub fn sha512(data: &[u8]) -> [u8; 64] {
+    // TODO: should we use aws-lc-rs DIGEST?
     let digest = digest::digest(&SHA512, data);
     let mut result = [0u8; 64];
     result.copy_from_slice(digest.as_ref());
