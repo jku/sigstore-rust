@@ -8,7 +8,7 @@ use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::parse_certificate_info;
 use sigstore_trust_root::TrustedRoot;
 
-use sigstore_types::{Bundle, Sha256Hash, SignatureContent, Statement};
+use sigstore_types::{Bundle, SignatureContent, Statement};
 
 /// Default clock skew tolerance in seconds (60 seconds = 1 minute)
 pub const DEFAULT_CLOCK_SKEW_SECONDS: i64 = 60;
@@ -330,7 +330,7 @@ impl Verifier {
             {
                 let payload_bytes = envelope.payload.as_bytes();
 
-                let artifact_hash = Sha256Hash::from_bytes(sigstore_crypto::sha256(artifact));
+                let artifact_hash = sigstore_crypto::sha256(artifact);
                 let artifact_hash_hex = artifact_hash.to_hex();
 
                 let payload_str = std::str::from_utf8(payload_bytes).map_err(|e| {

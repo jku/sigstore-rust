@@ -10,7 +10,7 @@ use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::{parse_identity_token, IdentityToken};
 use sigstore_rekor::{HashedRekord, RekorClient};
 use sigstore_tsa::TimestampClient;
-use sigstore_types::{Bundle, MediaType, Sha256Hash};
+use sigstore_types::{Bundle, MediaType};
 use x509_cert::der::Decode;
 use x509_cert::ext::pkix::BasicConstraints;
 use x509_cert::Certificate;
@@ -267,8 +267,7 @@ impl Signer {
         key_pair: &KeyPair,
     ) -> Result<(TlogEntryBuilder, PublicKeyPem)> {
         // Compute artifact hash
-        let hash_bytes = sigstore_crypto::sha256(artifact);
-        let artifact_hash = Sha256Hash::from_bytes(hash_bytes);
+        let artifact_hash = sigstore_crypto::sha256(artifact);
 
         // Export public key for Rekor
         let public_key_pem = key_pair

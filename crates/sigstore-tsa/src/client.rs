@@ -2,6 +2,7 @@
 
 use crate::asn1::{AlgorithmIdentifier, Asn1MessageImprint, TimeStampReq, TimeStampResp};
 use crate::error::{Error, Result};
+use sigstore_types::Sha256Hash;
 
 /// A client for interacting with a Time-Stamp Authority
 pub struct TimestampClient {
@@ -38,11 +39,7 @@ impl TimestampClient {
     ///
     /// # Returns
     /// The raw timestamp token (DER-encoded CMS SignedData)
-    pub async fn timestamp(
-        &self,
-        digest: &[u8],
-        algorithm: AlgorithmIdentifier,
-    ) -> Result<Vec<u8>> {
+    async fn timestamp(&self, digest: &[u8], algorithm: AlgorithmIdentifier) -> Result<Vec<u8>> {
         // Build the timestamp request
         let imprint = Asn1MessageImprint::new(algorithm, digest.to_vec());
         let request = TimeStampReq::new(imprint);
@@ -90,23 +87,14 @@ impl TimestampClient {
         Ok(response_bytes.to_vec())
     }
 
-    /// Request a timestamp for SHA-256 digest
-    pub async fn timestamp_sha256(&self, digest: &[u8]) -> Result<Vec<u8>> {
-        self.timestamp(digest, AlgorithmIdentifier::sha256()).await
-    }
-
-    /// Request a timestamp for SHA-384 digest
-    pub async fn timestamp_sha384(&self, digest: &[u8]) -> Result<Vec<u8>> {
-        self.timestamp(digest, AlgorithmIdentifier::sha384()).await
-    }
-
-    /// Request a timestamp for SHA-512 digest
-    pub async fn timestamp_sha512(&self, digest: &[u8]) -> Result<Vec<u8>> {
-        self.timestamp(digest, AlgorithmIdentifier::sha512()).await
+    /// Request a timestamp for a SHA-256 digest
+    pub async fn timestamp_sha256(&self, digest: &Sha256Hash) -> Result<Vec<u8>> {
+        self.timestamp(digest.as_bytes(), AlgorithmIdentifier::sha256())
+            .await
     }
 }
 
 /// Convenience function to get a timestamp from the Sigstore TSA
-pub async fn timestamp_sigstore(digest: &[u8]) -> Result<Vec<u8>> {
+pub async fn timestamp_sigstore(digest: &Sha256Hash) -> Result<Vec<u8>> {
     TimestampClient::sigstore().timestamp_sha256(digest).await
 }

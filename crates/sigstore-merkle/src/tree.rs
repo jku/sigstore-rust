@@ -20,7 +20,7 @@ pub fn hash_leaf(data: &[u8]) -> Sha256Hash {
     let mut hasher = Sha256Hasher::new();
     hasher.update(&[LEAF_HASH_PREFIX]);
     hasher.update(data);
-    Sha256Hash::from_bytes(hasher.finalize())
+    hasher.finalize()
 }
 
 /// Hash two child nodes to create a parent node
@@ -31,7 +31,7 @@ pub fn hash_children(left: &Sha256Hash, right: &Sha256Hash) -> Sha256Hash {
     hasher.update(&[NODE_HASH_PREFIX]);
     hasher.update(left.as_bytes());
     hasher.update(right.as_bytes());
-    Sha256Hash::from_bytes(hasher.finalize())
+    hasher.finalize()
 }
 
 /// Calculate the number of trailing zeros in a number (LSB)
@@ -64,9 +64,9 @@ mod tests {
         // Verify it's 32 bytes
         assert_eq!(hash.as_bytes().len(), 32);
 
-        // Verify it's different from raw SHA256
+        // Verify it's different from raw SHA256 (leaf hash has a prefix)
         let raw_hash = sigstore_crypto::sha256(data);
-        assert_ne!(hash.as_bytes(), &raw_hash);
+        assert_ne!(hash, raw_hash);
     }
 
     #[test]

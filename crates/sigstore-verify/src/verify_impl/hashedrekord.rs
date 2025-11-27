@@ -100,7 +100,7 @@ fn get_artifact_hash(
 ) -> Result<Sha256Hash> {
     if !artifact.is_empty() {
         // We have the actual artifact, compute its hash
-        Ok(Sha256Hash::from_bytes(sigstore_crypto::sha256(artifact)))
+        Ok(sigstore_crypto::sha256(artifact))
     } else if skip_artifact_hash {
         // DIGEST mode - extract hash from bundle's message signature
         if let SignatureContent::MessageSignature(sig) = content {

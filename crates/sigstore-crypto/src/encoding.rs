@@ -225,7 +225,8 @@ impl KeyHint {
     /// Compute key hint from a public key (first 4 bytes of SHA-256)
     pub fn from_public_key(public_key_der: &[u8]) -> Self {
         let hash = crate::hash::sha256(public_key_der);
-        Self([hash[0], hash[1], hash[2], hash[3]])
+        let bytes = hash.as_bytes();
+        Self([bytes[0], bytes[1], bytes[2], bytes[3]])
     }
 
     /// Get the underlying bytes

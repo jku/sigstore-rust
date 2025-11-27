@@ -1,30 +1,14 @@
 //! Hashing utilities using aws-lc-rs
 
-use aws_lc_rs::digest::{self, Context, SHA256, SHA384, SHA512};
+use aws_lc_rs::digest::{self, Context, SHA256};
+use sigstore_types::Sha256Hash;
 
-/// Hash data using SHA-256
-pub fn sha256(data: &[u8]) -> [u8; 32] {
+/// Hash data using SHA-256, returning a typed hash
+pub fn sha256(data: &[u8]) -> Sha256Hash {
     let digest = digest::digest(&SHA256, data);
     let mut result = [0u8; 32];
     result.copy_from_slice(digest.as_ref());
-    result
-}
-
-/// Hash data using SHA-384
-pub fn sha384(data: &[u8]) -> [u8; 48] {
-    let digest = digest::digest(&SHA384, data);
-    let mut result = [0u8; 48];
-    result.copy_from_slice(digest.as_ref());
-    result
-}
-
-/// Hash data using SHA-512
-pub fn sha512(data: &[u8]) -> [u8; 64] {
-    // TODO: should we use aws-lc-rs DIGEST?
-    let digest = digest::digest(&SHA512, data);
-    let mut result = [0u8; 64];
-    result.copy_from_slice(digest.as_ref());
-    result
+    Sha256Hash::from_bytes(result)
 }
 
 /// Incremental SHA-256 hasher
@@ -45,12 +29,12 @@ impl Sha256Hasher {
         self.context.update(data);
     }
 
-    /// Finalize and get the digest
-    pub fn finalize(self) -> [u8; 32] {
+    /// Finalize and get the digest as a typed hash
+    pub fn finalize(self) -> Sha256Hash {
         let digest = self.context.finish();
         let mut result = [0u8; 32];
         result.copy_from_slice(digest.as_ref());
-        result
+        Sha256Hash::from_bytes(result)
     }
 }
 
@@ -67,13 +51,13 @@ mod tests {
     #[test]
     fn test_sha256() {
         let hash = sha256(b"hello");
-        assert_eq!(hash.len(), 32);
+        assert_eq!(hash.as_bytes().len(), 32);
 
         // Known SHA-256 hash of "hello"
         let expected =
             hex::decode("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
                 .unwrap();
-        assert_eq!(&hash[..], &expected[..]);
+        assert_eq!(hash.as_bytes(), expected.as_slice());
     }
 
     #[test]

@@ -78,19 +78,11 @@ fn verify_dsse_v001(
     // Extract the signing certificate from the bundle
     let cert_der = super::helpers::extract_certificate_der(&bundle.verification_material.content)?;
 
-    // Convert DER certificate to PEM format
-    // Use x509-cert crate for proper PEM encoding
-    use x509_cert::der::Decode;
-    use x509_cert::der::EncodePem;
-    let cert = x509_cert::Certificate::from_der(&cert_der).map_err(|e| {
-        Error::Verification(format!(
-            "failed to parse certificate for PEM encoding: {}",
-            e
-        ))
-    })?;
-    let cert_pem_str = cert
-        .to_pem(x509_cert::der::pem::LineEnding::LF)
-        .map_err(|e| Error::Verification(format!("failed to encode certificate as PEM: {}", e)))?;
+    // Convert DER certificate to PEM format directly without parsing
+    let cert_pem_str = pem::encode_config(
+        &pem::Pem::new("CERTIFICATE", cert_der),
+        pem::EncodeConfig::new().set_line_ending(pem::LineEnding::LF),
+    );
 
     // Verify that the signatures in the bundle match what's in Rekor
     // This prevents signature substitution attacks

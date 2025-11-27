@@ -176,7 +176,7 @@ pub fn extract_sct(
     };
 
     // Calculate the issuer key hash (SHA-256 of issuer's SPKI)
-    let issuer_key_hash = sigstore_crypto::sha256(issuer_spki_der);
+    let issuer_key_hash = *sigstore_crypto::sha256(issuer_spki_der).as_bytes();
 
     Ok((sct, issuer_key_hash))
 }

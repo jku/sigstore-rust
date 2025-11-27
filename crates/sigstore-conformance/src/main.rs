@@ -11,7 +11,7 @@ use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::parse_identity_token;
 use sigstore_rekor::RekorClient;
 use sigstore_trust_root::TrustedRoot;
-use sigstore_types::{Bundle, MediaType, Sha256Hash, SignatureContent};
+use sigstore_types::{Bundle, MediaType, SignatureContent};
 use sigstore_verify::{verify, VerificationPolicy};
 
 use std::env;
@@ -243,11 +243,10 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.as_bytes());
 
     // Compute artifact hash using sigstore-crypto
-    let hash_bytes = sigstore_crypto::sha256(&artifact_data);
-    let artifact_hash_typed = Sha256Hash::from_bytes(hash_bytes);
+    let artifact_hash = sigstore_crypto::sha256(&artifact_data);
 
     // For v2, we still need hex for now
-    let artifact_hash_hex = hex::encode(hash_bytes);
+    let artifact_hash_hex = artifact_hash.to_hex();
 
     // Upload to Rekor
     let rekor = RekorClient::new(&rekor_url);
@@ -261,7 +260,7 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         rekor.create_entry_v2(hashed_rekord).await?
     } else {
         let hashed_rekord =
-            sigstore_rekor::HashedRekord::new(&artifact_hash_typed, &signature, &public_key_pem);
+            sigstore_rekor::HashedRekord::new(&artifact_hash, &signature, &public_key_pem);
         rekor.create_entry(hashed_rekord).await?
     };
 

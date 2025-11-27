@@ -289,8 +289,8 @@ pub fn verify_certificate_chain(
             &intermediate_certs,
             verification_time,
             KeyUsage::required(ID_KP_CODE_SIGNING.as_bytes()),
-            None, // No revocation checking
-            None, // No path verification callback
+            None, // No CRL/OCSP revocation checking (matches sigstore-python)
+            None, // No custom path validation callback needed
         )
         .map_err(|e| Error::Verification(format!("certificate chain validation failed: {}", e)))?;
 

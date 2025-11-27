@@ -1777,6 +1777,7 @@ dependencies = [
  "cms",
  "const-oid",
  "hex",
+ "pem",
  "rustls-pki-types",
  "rustls-webpki 0.102.8",
  "serde",

@@ -50,8 +50,7 @@ fn try_decode_hash(s: &str) -> Option<Sha256Hash> {
             if let Ok(bytes) = base64::prelude::BASE64_STANDARD.decode(s) {
                 if !bytes.is_empty() && bytes.len() != 32 {
                     // Hash the short bytes to get a unique 32-byte placeholder
-                    let hash = sigstore_crypto::sha256(&bytes);
-                    return Some(Sha256Hash::from_bytes(hash));
+                    return Some(sigstore_crypto::sha256(&bytes));
                 }
             }
             None
@@ -278,11 +277,7 @@ fn test_hash_leaf_format() {
     raw_data.extend_from_slice(data);
     let expected = sigstore_crypto::sha256(&raw_data);
 
-    assert_eq!(
-        hash.as_bytes(),
-        &expected,
-        "hash_leaf should use 0x00 prefix"
-    );
+    assert_eq!(hash, expected, "hash_leaf should use 0x00 prefix");
 }
 
 #[test]
@@ -296,9 +291,5 @@ fn test_hash_children_format() {
     raw_data.extend_from_slice(right.as_bytes());
     let expected = sigstore_crypto::sha256(&raw_data);
 
-    assert_eq!(
-        hash.as_bytes(),
-        &expected,
-        "hash_children should use 0x01 prefix"
-    );
+    assert_eq!(hash, expected, "hash_children should use 0x01 prefix");
 }

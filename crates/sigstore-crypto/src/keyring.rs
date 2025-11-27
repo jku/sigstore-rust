@@ -73,7 +73,7 @@ mod tests {
     fn test_keyring_add_and_get() {
         let mut keyring = Keyring::new();
         let kp = KeyPair::generate_ed25519().unwrap();
-        let key_id = sha256(kp.public_key_bytes()).to_vec();
+        let key_id = sha256(kp.public_key_bytes()).as_bytes().to_vec();
         let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
 
         keyring.add_key(key_id.clone(), vk);
@@ -85,7 +85,7 @@ mod tests {
     fn test_keyring_verify() {
         let mut keyring = Keyring::new();
         let kp = KeyPair::generate_ed25519().unwrap();
-        let key_id = sha256(kp.public_key_bytes()).to_vec();
+        let key_id = sha256(kp.public_key_bytes()).as_bytes().to_vec();
         let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
 
         keyring.add_key(key_id.clone(), vk);
@@ -105,14 +105,14 @@ mod tests {
         // Add multiple keys
         for _ in 0..3 {
             let kp = KeyPair::generate_ed25519().unwrap();
-            let key_id = sha256(kp.public_key_bytes()).to_vec();
+            let key_id = sha256(kp.public_key_bytes()).as_bytes().to_vec();
             let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
             keyring.add_key(key_id, vk);
         }
 
         // Sign with a new key and add it
         let kp = KeyPair::generate_ed25519().unwrap();
-        let key_id = sha256(kp.public_key_bytes()).to_vec();
+        let key_id = sha256(kp.public_key_bytes()).as_bytes().to_vec();
         let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
         keyring.add_key(key_id.clone(), vk);
 

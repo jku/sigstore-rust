@@ -13,7 +13,8 @@ pub use sigstore_types::{Checkpoint, CheckpointSignature};
 /// The key hint is the first 4 bytes of SHA-256(public key).
 pub fn compute_key_hint(public_key_der: &[u8]) -> [u8; 4] {
     let hash = crate::hash::sha256(public_key_der);
-    [hash[0], hash[1], hash[2], hash[3]]
+    let bytes = hash.as_bytes();
+    [bytes[0], bytes[1], bytes[2], bytes[3]]
 }
 
 // OID constants for key type identification

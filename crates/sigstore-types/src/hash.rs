@@ -27,8 +27,10 @@ impl HashAlgorithm {
         }
     }
 
-    /// Get the OID for this algorithm
-    // TODO: Use a const_oid type here
+    /// Get the OID for this algorithm as a string
+    ///
+    /// Returns a string representation to avoid adding const-oid as a dependency.
+    /// Consumers can parse this with `ObjectIdentifier::new_unwrap()` if needed.
     pub fn oid(&self) -> &'static str {
         match self {
             HashAlgorithm::Sha2256 => "2.16.840.1.101.3.4.2.1",

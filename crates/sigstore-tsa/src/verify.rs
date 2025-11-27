@@ -644,9 +644,8 @@ fn validate_tsa_certificate_chain(
             &intermediate_ders,
             verification_time,
             KeyUsage::required(ID_KP_TIME_STAMPING.as_bytes()),
-            // TODO: Double check this vs. sigstore-python / go
-            None, // No revocation checking
-            None, // No path verification callback
+            None, // No CRL/OCSP revocation checking (matches sigstore-python)
+            None, // No custom path validation callback needed
         )
         .map_err(|e| {
             Error::CertificateValidationError(format!(

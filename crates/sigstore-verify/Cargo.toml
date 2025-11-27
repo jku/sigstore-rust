@@ -26,6 +26,7 @@ hex = { workspace = true }
 cms = { workspace = true }
 const-oid = { workspace = true }
 tls_codec = { workspace = true }
+pem = { workspace = true }
 rustls-webpki = { workspace = true }
 rustls-pki-types = { workspace = true }
 tracing = { workspace = true }

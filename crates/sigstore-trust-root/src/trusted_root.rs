@@ -262,7 +262,7 @@ impl TrustedRoot {
         for ctlog in &self.ctlogs {
             let key_bytes = ctlog.public_key.raw_bytes.as_bytes();
             // Compute SHA-256 hash of the public key to get the log ID
-            let log_id = sigstore_crypto::sha256(key_bytes).to_vec();
+            let log_id = sigstore_crypto::sha256(key_bytes).as_bytes().to_vec();
             result.push((log_id, key_bytes.to_vec()));
         }
         Ok(result)
