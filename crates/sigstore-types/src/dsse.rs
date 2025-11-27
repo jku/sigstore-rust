@@ -1,7 +1,7 @@
 //! Dead Simple Signing Envelope (DSSE) types
 //!
 //! DSSE is a signature envelope format used for signing arbitrary payloads.
-//! Specification: https://github.com/secure-systems-lab/dsse
+//! Specification: <https://github.com/secure-systems-lab/dsse>
 
 use crate::encoding::{KeyId, PayloadBytes, SignatureBytes};
 use serde::{Deserialize, Serialize};

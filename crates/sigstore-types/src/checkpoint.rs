@@ -1,7 +1,7 @@
 //! Checkpoint (signed tree head) types
 //!
 //! A checkpoint represents a signed commitment to the state of a transparency log.
-//! Format specified in: https://github.com/transparency-dev/formats/blob/main/log/README.md
+//! Format specified in: <https://github.com/transparency-dev/formats/blob/main/log/README.md>
 
 use crate::encoding::{base64_bytes, Sha256Hash};
 use crate::error::{Error, Result};

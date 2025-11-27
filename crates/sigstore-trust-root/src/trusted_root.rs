@@ -393,7 +393,7 @@ impl TrustedRoot {
     }
 }
 
-/// Embedded production trusted root from https://tuf-repo-cdn.sigstore.dev/
+/// Embedded production trusted root from <https://tuf-repo-cdn.sigstore.dev/>
 /// This is the default trusted root for Sigstore's public production instance.
 pub const SIGSTORE_PRODUCTION_TRUSTED_ROOT: &str = include_str!("trusted_root.json");
 

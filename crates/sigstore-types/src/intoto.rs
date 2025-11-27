@@ -4,7 +4,7 @@
 //! This module defines types for in-toto attestation statements, commonly used
 //! with DSSE envelopes in Sigstore.
 //!
-//! Specification: https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md
+//! Specification: <https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md>
 
 use serde::{Deserialize, Serialize};
 
@@ -16,12 +16,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Statement {
-    /// Type identifier for the statement (typically "https://in-toto.io/Statement/v1")
+    /// Type identifier for the statement (typically "<https://in-toto.io/Statement/v1>")
     #[serde(rename = "_type")]
     pub type_: String,
     /// Subjects (artifacts) being attested about
     pub subject: Vec<Subject>,
-    /// Type of the predicate (e.g., "https://slsa.dev/provenance/v1")
+    /// Type of the predicate (e.g., "<https://slsa.dev/provenance/v1>")
     pub predicate_type: String,
     /// The actual attestation content (format depends on predicate_type)
     pub predicate: serde_json::Value,

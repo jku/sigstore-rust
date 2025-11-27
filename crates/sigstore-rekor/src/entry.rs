@@ -363,7 +363,7 @@ pub struct InclusionProofV2 {
     pub checkpoint: CheckpointData,
 }
 
-/// Serde helper for Vec<Sha256Hash>
+/// Serde helper for `Vec<Sha256Hash>`
 mod sha256_hash_vec {
     use super::Sha256Hash;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

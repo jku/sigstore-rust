@@ -1,7 +1,7 @@
 //! Sigstore Conformance Client
 //!
 //! CLI implementation following the specification:
-//! https://github.com/sigstore/sigstore-conformance/blob/main/docs/cli_protocol.md
+//! <https://github.com/sigstore/sigstore-conformance/blob/main/docs/cli_protocol.md>
 //!
 //! This binary implements the conformance test protocol for Sigstore clients.
 
@@ -256,18 +256,12 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let public_key_pem = PublicKeyPem::new(leaf_cert_pem.to_string());
 
     let log_entry = if use_rekor_v2 {
-        let hashed_rekord = sigstore_rekor::HashedRekordV2::new(
-            &artifact_hash_hex,
-            &signature_b64,
-            leaf_cert_pem,
-        );
+        let hashed_rekord =
+            sigstore_rekor::HashedRekordV2::new(&artifact_hash_hex, &signature_b64, leaf_cert_pem);
         rekor.create_entry_v2(hashed_rekord).await?
     } else {
-        let hashed_rekord = sigstore_rekor::HashedRekord::new(
-            &artifact_hash_typed,
-            &signature,
-            &public_key_pem,
-        );
+        let hashed_rekord =
+            sigstore_rekor::HashedRekord::new(&artifact_hash_typed, &signature, &public_key_pem);
         rekor.create_entry(hashed_rekord).await?
     };
 
