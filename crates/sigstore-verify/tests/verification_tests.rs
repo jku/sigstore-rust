@@ -36,6 +36,12 @@ const SIGSTORE_JS_PROVENANCE: &str =
 // Bundle with otherName SAN (non-standard SAN type) - from sigstore-go test data
 const OTHERNAME_BUNDLE: &str = include_str!("../test_data/bundles/othername.sigstore.json");
 
+// Conda package attestation bundle (from prefix-dev/sigstore-example)
+const CONDA_ATTESTATION_BUNDLE: &str =
+    include_str!("../test_data/bundles/conda-attestation.sigstore.json");
+const CONDA_PACKAGE: &[u8] =
+    include_bytes!("../test_data/bundles/signed-package-2.1.0-hb0f4dca_0.conda");
+
 // Edge case bundles
 const BUNDLE_NO_CERT_V1: &str = include_str!("../test_data/bundles/bundle_no_cert_v1.txt.sigstore");
 const BUNDLE_NO_CHECKPOINT: &str =
@@ -758,5 +764,143 @@ fn test_bundle_v3_github_whl() {
     assert!(
         entry.inclusion_proof.is_some(),
         "Should have inclusion proof"
+    );
+}
+
+// ==== Conda Package Attestation Tests ====
+
+/// Test parsing a conda package attestation bundle from GitHub Actions
+#[test]
+fn test_parse_conda_attestation_bundle() {
+    let bundle =
+        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
+
+    // Should be v0.3 bundle
+    assert!(bundle.media_type.contains("0.3"), "Expected v0.3 bundle");
+
+    // Should be DSSE envelope with in-toto attestation
+    match &bundle.content {
+        sigstore_verify::types::SignatureContent::DsseEnvelope(env) => {
+            assert_eq!(
+                env.payload_type, "application/vnd.in-toto+json",
+                "Should have in-toto payload type"
+            );
+            assert_eq!(env.signatures.len(), 1, "Should have exactly 1 signature");
+
+            // Decode payload and verify it's a conda attestation
+            let payload_bytes = env.decode_payload();
+            let payload_str =
+                String::from_utf8(payload_bytes).expect("Payload should be valid UTF-8");
+            let statement: serde_json::Value =
+                serde_json::from_str(&payload_str).expect("Payload should be valid JSON");
+
+            assert_eq!(
+                statement["_type"].as_str(),
+                Some("https://in-toto.io/Statement/v1"),
+                "Should be in-toto Statement v1"
+            );
+            assert_eq!(
+                statement["predicateType"].as_str(),
+                Some("https://schemas.conda.org/attestations-publish-1.schema.json"),
+                "Should have conda attestation predicate type"
+            );
+
+            // Check subject
+            let subjects = statement["subject"]
+                .as_array()
+                .expect("Should have subjects");
+            assert_eq!(subjects.len(), 1, "Should have one subject");
+            assert_eq!(
+                subjects[0]["name"].as_str(),
+                Some("signed-package-2.1.0-hb0f4dca_0.conda"),
+                "Subject name should match package filename"
+            );
+        }
+        _ => panic!("Expected DSSE envelope"),
+    }
+
+    // Should have certificate
+    let cert = bundle.signing_certificate();
+    assert!(cert.is_some(), "Should have a signing certificate");
+
+    // Should have tlog entry
+    assert!(!bundle.verification_material.tlog_entries.is_empty());
+    let entry = &bundle.verification_material.tlog_entries[0];
+    assert_eq!(entry.kind_version.kind, "dsse");
+
+    // Should have inclusion proof
+    assert!(
+        entry.inclusion_proof.is_some(),
+        "Should have inclusion proof"
+    );
+}
+
+/// Test full verification of conda package with its attestation
+#[test]
+fn test_verify_conda_package_attestation() {
+    let bundle =
+        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
+
+    // Verify with identity requirements for GitHub Actions
+    let policy = VerificationPolicy::default()
+        .require_identity("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
+        .require_issuer("https://token.actions.githubusercontent.com");
+
+    let result = verify(CONDA_PACKAGE, &bundle, &policy, &production_root());
+    assert!(
+        result.is_ok(),
+        "Conda package verification should succeed: {:?}",
+        result.err()
+    );
+
+    let verification = result.unwrap();
+    assert!(verification.success);
+    assert_eq!(
+        verification.identity.as_deref(),
+        Some("https://github.com/prefix-dev/sigstore-example/.github/workflows/action.yaml@refs/heads/main")
+    );
+    assert_eq!(
+        verification.issuer.as_deref(),
+        Some("https://token.actions.githubusercontent.com")
+    );
+    assert!(verification.integrated_time.is_some());
+}
+
+/// Test that verification fails with wrong identity
+#[test]
+fn test_verify_conda_package_wrong_identity() {
+    let bundle =
+        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
+
+    // Use wrong identity
+    let policy = VerificationPolicy::default()
+        .require_identity(
+            "https://github.com/wrong-org/wrong-repo/.github/workflows/wrong.yaml@refs/heads/main",
+        )
+        .require_issuer("https://token.actions.githubusercontent.com");
+
+    let result = verify(CONDA_PACKAGE, &bundle, &policy, &production_root());
+    assert!(
+        result.is_err(),
+        "Verification should fail with wrong identity"
+    );
+}
+
+/// Test that verification fails with tampered package
+#[test]
+fn test_verify_conda_package_tampered() {
+    let bundle =
+        Bundle::from_json(CONDA_ATTESTATION_BUNDLE).expect("Failed to parse conda attestation");
+
+    // Use modified package content
+    let tampered_package = b"this is not the original package content";
+
+    let policy =
+        VerificationPolicy::default().require_issuer("https://token.actions.githubusercontent.com");
+
+    let result = verify(tampered_package, &bundle, &policy, &production_root());
+    assert!(
+        result.is_err(),
+        "Verification should fail with tampered package"
     );
 }

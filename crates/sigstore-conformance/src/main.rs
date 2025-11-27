@@ -6,7 +6,7 @@
 //! This binary implements the conformance test protocol for Sigstore clients.
 
 use sigstore_bundle::{BundleBuilder, TlogEntryBuilder};
-use sigstore_crypto::{KeyPair, PublicKeyPem};
+use sigstore_crypto::{CertificatePem, KeyPair};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::parse_identity_token;
 use sigstore_rekor::RekorClient;
@@ -251,8 +251,8 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     // Upload to Rekor
     let rekor = RekorClient::new(&rekor_url);
 
-    // Convert leaf_cert_pem to PublicKeyPem
-    let public_key_pem = PublicKeyPem::new(leaf_cert_pem.to_string());
+    // Use CertificatePem for type-safe Rekor entry creation
+    let certificate_pem = CertificatePem::new(leaf_cert_pem.to_string());
 
     let log_entry = if use_rekor_v2 {
         let hashed_rekord =
@@ -260,7 +260,7 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         rekor.create_entry_v2(hashed_rekord).await?
     } else {
         let hashed_rekord =
-            sigstore_rekor::HashedRekord::new(&artifact_hash, &signature, &public_key_pem);
+            sigstore_rekor::HashedRekord::new(&artifact_hash, &signature, &certificate_pem);
         rekor.create_entry(hashed_rekord).await?
     };
 
@@ -272,7 +272,7 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let mut bundle_builder = BundleBuilder::new()
         .version(MediaType::Bundle0_2)
         .certificate_chain(chain_der_bytes)
-        .message_signature(signature.as_bytes().to_vec())
+        .message_signature(signature.clone(), artifact_hash)
         .add_tlog_entry(tlog_entry);
 
     if let Some(tsa_url) = tsa_url {

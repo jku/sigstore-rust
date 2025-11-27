@@ -5,7 +5,7 @@
 
 use crate::error::{Error, Result};
 use const_oid::db::rfc5912::ID_KP_CODE_SIGNING;
-use rustls_pki_types::CertificateDer;
+use rustls_pki_types::{CertificateDer, UnixTime};
 use sigstore_crypto::CertificateInfo;
 use sigstore_trust_root::TrustedRoot;
 use sigstore_types::bundle::VerificationMaterialContent;
@@ -113,24 +113,23 @@ pub fn extract_tsa_timestamp(
             opts = opts.with_intermediates(tsa_intermediates);
         }
 
-        // Get TSA leaf certificate
+        // Get ALL TSA leaf certificates (there may be multiple TSAs)
         if let Ok(tsa_leaves) = trusted_root.tsa_leaf_certs() {
-            if let Some(leaf) = tsa_leaves.first() {
-                opts = opts.with_tsa_certificate(leaf.clone());
-            }
-        }
-
-        // Get TSA validity period from trusted root
-        if let Ok(tsa_certs) = trusted_root.tsa_certs_with_validity() {
-            if let Some((_cert, Some(start), Some(end))) = tsa_certs.first() {
-                opts = opts.with_tsa_validity(*start, *end);
-            }
+            opts = opts.with_tsa_certificates(tsa_leaves);
         }
 
         // Verify the timestamp response with full cryptographic validation
         let result = verify_timestamp_response(ts_bytes, signature_bytes, opts).map_err(|e| {
             Error::Verification(format!("TSA timestamp verification failed: {}", e))
         })?;
+
+        // Check that the timestamp falls within the TSA's validity period from the trust root
+        if !trusted_root.is_timestamp_within_tsa_validity(result.time) {
+            return Err(Error::Verification(format!(
+                "TSA timestamp {} is outside the trust root's TSA validity period",
+                result.time
+            )));
+        }
 
         let timestamp = result.time.timestamp();
         any_timestamp_verified = true;
@@ -272,9 +271,8 @@ pub fn verify_certificate_chain(
     })?;
 
     // Convert validation time to webpki UnixTime
-    let verification_time = webpki::types::UnixTime::since_unix_epoch(
-        std::time::Duration::from_secs(validation_time as u64),
-    );
+    let verification_time =
+        UnixTime::since_unix_epoch(std::time::Duration::from_secs(validation_time as u64));
 
     // Verify the certificate chain with CODE_SIGNING EKU
     // This performs:

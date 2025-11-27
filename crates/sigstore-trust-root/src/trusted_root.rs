@@ -379,6 +379,51 @@ impl TrustedRoot {
         }
         Ok(None)
     }
+
+    /// Check if a timestamp is within any TSA's validity period from the trust root
+    ///
+    /// Returns true if:
+    /// - There are no timestamp authorities configured (no TSA verification)
+    /// - Any TSA has no `valid_for` field (open-ended validity)
+    /// - The timestamp falls within at least one TSA's `valid_for` period
+    ///
+    /// Returns false only if there are TSAs with validity constraints and the
+    /// timestamp doesn't fall within any of them.
+    pub fn is_timestamp_within_tsa_validity(&self, timestamp: DateTime<Utc>) -> bool {
+        // If no TSAs are configured, no validity check needed
+        if self.timestamp_authorities.is_empty() {
+            return true;
+        }
+
+        for tsa in &self.timestamp_authorities {
+            // If a TSA has no valid_for constraint, it's valid for all time
+            let Some(valid_for) = &tsa.valid_for else {
+                return true;
+            };
+
+            let start = valid_for
+                .start
+                .as_ref()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+            let end = valid_for
+                .end
+                .as_ref()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+
+            // Check if timestamp falls within this TSA's validity period
+            let after_start = start.map_or(true, |s| timestamp >= s);
+            let before_end = end.map_or(true, |e| timestamp <= e);
+
+            if after_start && before_end {
+                return true;
+            }
+        }
+
+        // No TSA's validity period matched
+        false
+    }
 }
 
 /// Embedded production trusted root from <https://tuf-repo-cdn.sigstore.dev/>

@@ -5,7 +5,7 @@
 use crate::error::{Error, Result};
 use base64::Engine as _;
 use sigstore_bundle::{BundleBuilder, TlogEntryBuilder};
-use sigstore_crypto::{KeyPair, PublicKeyPem, Signature, SigningScheme};
+use sigstore_crypto::{CertificatePem, KeyPair, Signature, SigningScheme};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::{parse_identity_token, IdentityToken};
 use sigstore_rekor::{HashedRekord, RekorClient};
@@ -143,14 +143,14 @@ impl Signer {
         let key_pair = self.generate_ephemeral_keypair()?;
 
         // 2. Get certificate from Fulcio
-        let (chain_der_b64, _leaf_cert_pem) = self.request_certificate(&key_pair).await?;
+        let (chain_der_b64, leaf_cert_pem) = self.request_certificate(&key_pair).await?;
 
         // 3. Sign the artifact
         let signature = key_pair.sign(artifact)?;
 
-        // 4. Create Rekor entry
-        let (tlog_entry, _public_key_pem) = self
-            .create_rekor_entry(artifact, &signature, &key_pair)
+        // 4. Create Rekor entry (with certificate, not just public key)
+        let tlog_entry = self
+            .create_rekor_entry(artifact, &signature, &leaf_cert_pem)
             .await?;
 
         // 5. Get timestamp from TSA (optional)
@@ -160,8 +160,17 @@ impl Signer {
             None
         };
 
-        // 6. Build and return bundle
-        self.build_bundle(chain_der_b64, signature, tlog_entry, timestamp_b64)
+        // 6. Compute artifact hash for bundle (required for cosign compatibility)
+        let artifact_hash = sigstore_crypto::sha256(artifact);
+
+        // 7. Build and return bundle
+        self.build_bundle(
+            chain_der_b64,
+            signature,
+            tlog_entry,
+            timestamp_b64,
+            artifact_hash,
+        )
     }
 
     /// Generate an ephemeral key pair based on the configured signing scheme
@@ -264,19 +273,18 @@ impl Signer {
         &self,
         artifact: &[u8],
         signature: &Signature,
-        key_pair: &KeyPair,
-    ) -> Result<(TlogEntryBuilder, PublicKeyPem)> {
+        certificate_pem: &str,
+    ) -> Result<TlogEntryBuilder> {
         // Compute artifact hash
         let artifact_hash = sigstore_crypto::sha256(artifact);
 
-        // Export public key for Rekor
-        let public_key_pem = key_pair
-            .public_key_to_pem()
-            .map_err(|e| Error::Signing(format!("Failed to export public key: {}", e)))?;
-        let public_key_pem_obj = PublicKeyPem::new(public_key_pem.to_string());
+        // Use the certificate PEM for Rekor (not just the public key)
+        // This is required for proper verification - the Rekor entry must contain
+        // the certificate so verifiers can match it against the bundle
+        let cert_pem_obj = CertificatePem::new(certificate_pem.to_string());
 
-        // Create hashedrekord entry
-        let hashed_rekord = HashedRekord::new(&artifact_hash, signature, &public_key_pem_obj);
+        // Create hashedrekord entry with the certificate
+        let hashed_rekord = HashedRekord::new(&artifact_hash, signature, &cert_pem_obj);
 
         // Create Rekor client and upload
         let rekor = RekorClient::new(&self.rekor_url);
@@ -288,7 +296,7 @@ impl Signer {
         // Build TlogEntry from the log entry response
         let tlog_builder = TlogEntryBuilder::from_log_entry(&log_entry, "hashedrekord", "0.0.1");
 
-        Ok((tlog_builder, public_key_pem_obj))
+        Ok(tlog_builder)
     }
 
     /// Request a timestamp from the Timestamp Authority
@@ -315,6 +323,7 @@ impl Signer {
         signature: Signature,
         tlog_builder: TlogEntryBuilder,
         timestamp_b64: Option<String>,
+        artifact_hash: sigstore_types::Sha256Hash,
     ) -> Result<Bundle> {
         // Decode certificate chain from base64 to DER bytes
         let chain_der: Vec<Vec<u8>> = chain_der_b64
@@ -326,11 +335,11 @@ impl Signer {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        // Build bundle with raw bytes
+        // Build bundle
         let mut bundle_builder = BundleBuilder::new()
             .version(MediaType::Bundle0_2)
             .certificate_chain(chain_der)
-            .message_signature(signature.into_bytes())
+            .message_signature(signature, artifact_hash)
             .add_tlog_entry(tlog_builder.build());
 
         // Add timestamp if present

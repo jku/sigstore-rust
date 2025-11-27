@@ -20,6 +20,6 @@ pub use encoding::{CertificateDer, DerBytes, KeyHint, PublicKeySpki, SignatureBy
 pub use error::{Error, Result};
 pub use hash::{sha256, Sha256Hasher};
 pub use keyring::Keyring;
-pub use signing::{KeyPair, PublicKeyPem, Signature, SigningScheme};
+pub use signing::{CertificatePem, KeyPair, PublicKeyPem, Signature, SigningScheme};
 pub use verification::{verify_signature, verify_signature_prehashed, VerificationKey};
 pub use x509::{der_from_pem, der_from_pem_any, parse_certificate_info, CertificateInfo};

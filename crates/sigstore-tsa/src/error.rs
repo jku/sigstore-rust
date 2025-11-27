@@ -49,10 +49,6 @@ pub enum Error {
     #[error("Leaf certificate does not have TimeStamping Extended Key Usage")]
     InvalidEKU,
 
-    /// Timestamp is outside validity period
-    #[error("Timestamp is outside validity period")]
-    OutsideValidityPeriod,
-
     /// TSA certificate validation failed
     #[error("TSA certificate validation failed: {0}")]
     CertificateValidationError(String),

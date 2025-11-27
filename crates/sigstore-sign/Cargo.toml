@@ -21,6 +21,10 @@ x509-cert = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
 
 [features]
 default = []

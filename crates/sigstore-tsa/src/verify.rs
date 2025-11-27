@@ -38,12 +38,9 @@ pub struct VerifyOpts<'a> {
     /// Intermediate certificates for chain building
     pub intermediates: Vec<CertificateDer<'a>>,
 
-    /// TSA certificate (optional if embedded in timestamp)
-    pub tsa_certificate: Option<CertificateDer<'a>>,
-
-    /// Validity period for the TSA certificate in the trusted root
-    /// If provided, the timestamp must fall within this period
-    pub tsa_valid_for: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    /// TSA certificates (optional if embedded in timestamp)
+    /// Multiple certificates can be provided to support multiple TSAs
+    pub tsa_certificates: Vec<CertificateDer<'a>>,
 }
 
 impl<'a> VerifyOpts<'a> {
@@ -52,8 +49,7 @@ impl<'a> VerifyOpts<'a> {
         Self {
             roots: Vec::new(),
             intermediates: Vec::new(),
-            tsa_certificate: None,
-            tsa_valid_for: None,
+            tsa_certificates: Vec::new(),
         }
     }
 
@@ -81,15 +77,9 @@ impl<'a> VerifyOpts<'a> {
         self
     }
 
-    /// Set the TSA certificate
-    pub fn with_tsa_certificate(mut self, cert: CertificateDer<'a>) -> Self {
-        self.tsa_certificate = Some(cert);
-        self
-    }
-
-    /// Set the TSA validity period
-    pub fn with_tsa_validity(mut self, start: DateTime<Utc>, end: DateTime<Utc>) -> Self {
-        self.tsa_valid_for = Some((start, end));
+    /// Add multiple TSA certificates
+    pub fn with_tsa_certificates(mut self, certs: Vec<CertificateDer<'a>>) -> Self {
+        self.tsa_certificates = certs;
         self
     }
 }
@@ -220,26 +210,6 @@ pub fn verify_timestamp_response(
 
     tracing::debug!("Extracted timestamp: {}", timestamp);
 
-    // Check that the timestamp is within the TSA validity period in the trusted root
-    if let Some((start, end)) = opts.tsa_valid_for {
-        if timestamp < start || timestamp > end {
-            tracing::error!(
-                "Timestamp {} is outside TSA validity period ({} to {})",
-                timestamp,
-                start,
-                end
-            );
-            return Err(Error::OutsideValidityPeriod);
-        }
-
-        tracing::debug!(
-            "Timestamp {} is within TSA validity period ({} to {})",
-            timestamp,
-            start,
-            end
-        );
-    }
-
     // Verify the CMS signature
     let tst_info_der = signed_data
         .encap_content_info
@@ -331,9 +301,9 @@ fn verify_cms_signature(
     // Extract certificates from SignedData
     let certificates = extract_certificates(signed_data);
 
-    // Add the provided TSA certificate if present
+    // Add the provided TSA certificates
     let mut all_certs = certificates;
-    if let Some(tsa_cert) = &opts.tsa_certificate {
+    for tsa_cert in &opts.tsa_certificates {
         use x509_cert::der::Decode;
         if let Ok(cert) = Certificate::from_der(tsa_cert.as_ref()) {
             all_certs.push(cert);
@@ -849,29 +819,19 @@ mod tests {
         // Test the VerifyOpts builder pattern
         let root = CertificateDer::from(vec![1, 2, 3]);
         let intermediate = CertificateDer::from(vec![4, 5, 6]);
-        let tsa_cert = CertificateDer::from(vec![7, 8, 9]);
-
-        let start = DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
-            .unwrap()
-            .to_utc();
-        let end = DateTime::parse_from_rfc3339("2025-01-01T00:00:00Z")
-            .unwrap()
-            .to_utc();
+        let tsa_certs = vec![
+            CertificateDer::from(vec![7, 8, 9]),
+            CertificateDer::from(vec![10, 11, 12]),
+        ];
 
         let opts = VerifyOpts::new()
             .with_root(root.clone())
             .with_intermediate(intermediate.clone())
-            .with_tsa_certificate(tsa_cert.clone())
-            .with_tsa_validity(start, end);
+            .with_tsa_certificates(tsa_certs);
 
         assert_eq!(opts.roots.len(), 1);
         assert_eq!(opts.intermediates.len(), 1);
-        assert!(opts.tsa_certificate.is_some());
-        assert!(opts.tsa_valid_for.is_some());
-
-        let (valid_start, valid_end) = opts.tsa_valid_for.unwrap();
-        assert_eq!(valid_start, start);
-        assert_eq!(valid_end, end);
+        assert_eq!(opts.tsa_certificates.len(), 2);
     }
 
     #[test]

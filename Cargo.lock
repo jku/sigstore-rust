@@ -1371,7 +1371,7 @@ dependencies = [
  "once_cell",
  "ring",
  "rustls-pki-types",
- "rustls-webpki 0.103.8",
+ "rustls-webpki",
  "subtle",
  "zeroize",
 ]
@@ -1384,18 +1384,6 @@ checksum = "94182ad936a0c91c324cd46c6511b9510ed16af436d7b5bab34beab0afd55f7a"
 dependencies = [
  "web-time",
  "zeroize",
-]
-
-[[package]]
-name = "rustls-webpki"
-version = "0.102.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
-dependencies = [
- "aws-lc-rs",
- "ring",
- "rustls-pki-types",
- "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -1696,6 +1684,10 @@ name = "sigstore-sign"
 version = "0.2.0"
 dependencies = [
  "base64",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
  "sigstore-bundle",
  "sigstore-crypto",
  "sigstore-fulcio",
@@ -1745,7 +1737,7 @@ dependencies = [
  "rand",
  "reqwest",
  "rustls-pki-types",
- "rustls-webpki 0.102.8",
+ "rustls-webpki",
  "serde_json",
  "sigstore-crypto",
  "sigstore-types",
@@ -1779,7 +1771,7 @@ dependencies = [
  "hex",
  "pem",
  "rustls-pki-types",
- "rustls-webpki 0.102.8",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "serde_json_canonicalizer",

@@ -2,7 +2,7 @@
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use sigstore_crypto::{PublicKeyPem, Signature};
+use sigstore_crypto::{CertificatePem, Signature};
 use sigstore_types::{
     CanonicalizedBody, CheckpointData, DerCertificate, EntryUuid, HashAlgorithm, HexLogId,
     InclusionPromise, KindVersion, LogId, PemContent, Sha256Hash, SignatureBytes, SignedTimestamp,
@@ -125,7 +125,11 @@ pub struct DsseEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DsseEntrySpec {
-    pub proposed_content: DsseProposedContent,
+    /// Proposed content - when present, signatures should NOT be included
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposed_content: Option<DsseProposedContent>,
+    /// Signatures - only used when proposedContent is NOT present
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub signatures: Vec<DsseEntrySignature>,
 }
 
@@ -148,25 +152,34 @@ pub struct DsseEntrySignature {
 }
 
 impl DsseEntry {
-    /// Create a new DSSE entry
+    /// Create a new DSSE entry from an envelope and certificate
+    ///
+    /// Uses the `proposedContent` mode where the envelope contains the signatures.
+    /// The Rekor server will extract and verify the signatures from the envelope.
     ///
     /// # Arguments
-    /// * `envelope_json` - JSON-encoded DSSE envelope (passed as-is, not base64-encoded)
+    /// * `envelope` - The DSSE envelope containing signatures
     /// * `certificate_pem` - PEM-encoded certificate (will be base64-encoded for API)
-    pub fn new(envelope_json: &str, certificate_pem: &str) -> Self {
+    pub fn new(envelope: &sigstore_types::DsseEnvelope, certificate_pem: &str) -> Self {
         use base64::Engine;
-        // Rekor API expects the envelope as a JSON string, NOT base64-encoded
+
+        // Serialize envelope to JSON (Rekor expects JSON string, not base64)
+        let envelope_json =
+            serde_json::to_string(envelope).expect("Failed to serialize DSSE envelope");
+
         // Rekor API expects the PEM to be base64-encoded
         let cert_base64 = base64::engine::general_purpose::STANDARD.encode(certificate_pem);
 
+        // When using proposedContent, do NOT include signatures separately -
+        // they are extracted from the envelope by the Rekor server
         Self {
             api_version: "0.0.1".to_string(),
             kind: "dsse".to_string(),
             spec: DsseEntrySpec {
-                proposed_content: DsseProposedContent {
-                    envelope: envelope_json.to_string(),
+                proposed_content: Some(DsseProposedContent {
+                    envelope: envelope_json,
                     verifiers: vec![cert_base64],
-                },
+                }),
                 signatures: vec![],
             },
         }
@@ -229,16 +242,20 @@ pub struct HashedRekordPublicKey {
 }
 
 impl HashedRekord {
-    /// Create a new HashedRekord entry
+    /// Create a new HashedRekord entry with a certificate
+    ///
+    /// The certificate (obtained from Fulcio) contains the identity binding that
+    /// verifiers need to validate. The `CertificatePem` type ensures you can't
+    /// accidentally pass a public key.
     ///
     /// # Arguments
     /// * `artifact_hash` - SHA256 hash of the artifact
     /// * `signature` - Signature bytes
-    /// * `public_key_pem` - PEM-encoded public key or certificate (will be base64-encoded for API)
+    /// * `certificate_pem` - PEM-encoded X.509 certificate from Fulcio
     pub fn new(
         artifact_hash: &Sha256Hash,
         signature: &Signature,
-        public_key_pem: &PublicKeyPem,
+        certificate_pem: &CertificatePem,
     ) -> Self {
         Self {
             api_version: "0.0.1".to_string(),
@@ -253,7 +270,7 @@ impl HashedRekord {
                 signature: HashedRekordSignature {
                     content: signature.clone().into(),
                     public_key: HashedRekordPublicKey {
-                        content: public_key_pem.clone().into(),
+                        content: certificate_pem.clone().into(),
                     },
                 },
             },
@@ -399,8 +416,8 @@ mod tests {
         let entry = HashedRekord::new(
             &Sha256Hash::from_bytes([0u8; 32]),
             &Signature::from_bytes(b"signature"),
-            &PublicKeyPem::new(
-                "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----".to_string(),
+            &CertificatePem::new(
+                "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----".to_string(),
             ),
         );
         assert_eq!(entry.kind, "hashedrekord");
@@ -422,8 +439,8 @@ mod tests {
         let entry = HashedRekord::new(
             &Sha256Hash::from_bytes([0u8; 32]),
             &Signature::from_bytes(b"signature"),
-            &PublicKeyPem::new(
-                "-----BEGIN PUBLIC KEY-----\ntest\n-----END PUBLIC KEY-----".to_string(),
+            &CertificatePem::new(
+                "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----".to_string(),
             ),
         );
         let json = serde_json::to_string(&entry).unwrap();

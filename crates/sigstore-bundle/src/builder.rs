@@ -1,5 +1,6 @@
 //! Bundle builder for creating Sigstore bundles
 
+use sigstore_crypto::Signature;
 use sigstore_rekor::entry::LogEntry;
 use sigstore_types::{
     bundle::{
@@ -53,17 +54,6 @@ impl BundleBuilder {
         self
     }
 
-    /// Set the signing certificate from base64-encoded DER
-    pub fn certificate_base64(mut self, cert_b64: &str) -> Result<Self, &'static str> {
-        let cert_der = DerCertificate::from_base64(cert_b64).map_err(|_| "invalid base64")?;
-        self.verification_content = Some(VerificationMaterialContent::Certificate(
-            sigstore_types::bundle::CertificateContent {
-                raw_bytes: cert_der,
-            },
-        ));
-        Ok(self)
-    }
-
     /// Set the certificate chain from DER bytes
     pub fn certificate_chain(mut self, certs_der: Vec<Vec<u8>>) -> Self {
         self.verification_content = Some(VerificationMaterialContent::X509CertificateChain {
@@ -97,25 +87,16 @@ impl BundleBuilder {
         self
     }
 
-    /// Set the message signature from bytes (without digest)
-    pub fn message_signature(mut self, signature: Vec<u8>) -> Self {
+    /// Set the message signature with artifact digest
+    ///
+    /// The digest is required for compatibility with cosign and other Sigstore tools.
+    pub fn message_signature(mut self, signature: Signature, artifact_digest: Sha256Hash) -> Self {
         self.signature_content = Some(SignatureContent::MessageSignature(MessageSignature {
-            message_digest: None,
-            signature: SignatureBytes::new(signature),
-        }));
-        self
-    }
-
-    /// Set the message signature with digest (recommended for cosign compatibility)
-    pub fn message_signature_with_digest(
-        mut self,
-        signature: Vec<u8>,
-        digest: Sha256Hash,
-        algorithm: sigstore_types::HashAlgorithm,
-    ) -> Self {
-        self.signature_content = Some(SignatureContent::MessageSignature(MessageSignature {
-            message_digest: Some(sigstore_types::bundle::MessageDigest { algorithm, digest }),
-            signature: SignatureBytes::new(signature),
+            message_digest: Some(sigstore_types::bundle::MessageDigest {
+                algorithm: sigstore_types::HashAlgorithm::Sha2256,
+                digest: artifact_digest,
+            }),
+            signature: SignatureBytes::new(signature.into_bytes()),
         }));
         self
     }

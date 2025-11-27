@@ -25,7 +25,7 @@ pub struct DsseSignature {
     /// Signature bytes
     pub sig: SignatureBytes,
     /// Key ID (optional hint for key lookup)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "KeyId::is_empty")]
     pub keyid: KeyId,
 }
 
@@ -111,8 +111,8 @@ mod tests {
     }
 
     #[test]
-    fn test_dsse_envelope_keyid_preservation() {
-        // Test that empty string keyid is preserved during round-trip
+    fn test_dsse_envelope_keyid_handling() {
+        // Test that empty keyid is omitted (matches GitHub/cosign behavior)
         let json_with_empty_keyid = r#"{"payloadType":"application/vnd.in-toto+json","payload":"dGVzdA==","signatures":[{"sig":"c2ln","keyid":""}]}"#;
 
         let envelope: DsseEnvelope = serde_json::from_str(json_with_empty_keyid).unwrap();
@@ -120,11 +120,16 @@ mod tests {
 
         let reserialized = serde_json::to_string(&envelope).unwrap();
         assert!(
-            reserialized.contains(r#""keyid":"""#),
-            "Empty keyid should be included in output"
+            !reserialized.contains("keyid"),
+            "Empty keyid should be omitted from output"
         );
 
-        // Test with non-empty keyid
+        // Test that missing keyid deserializes to default
+        let json_without_keyid = r#"{"payloadType":"application/vnd.in-toto+json","payload":"dGVzdA==","signatures":[{"sig":"c2ln"}]}"#;
+        let envelope_no_keyid: DsseEnvelope = serde_json::from_str(json_without_keyid).unwrap();
+        assert_eq!(envelope_no_keyid.signatures[0].keyid, KeyId::default());
+
+        // Test with non-empty keyid - should be preserved
         let json_with_keyid = r#"{"payloadType":"application/vnd.in-toto+json","payload":"dGVzdA==","signatures":[{"sig":"c2ln","keyid":"test-key"}]}"#;
         let envelope_with_keyid: DsseEnvelope = serde_json::from_str(json_with_keyid).unwrap();
         let json_out = serde_json::to_string(&envelope_with_keyid).unwrap();
