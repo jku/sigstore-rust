@@ -6,19 +6,17 @@
 use crate::error::{Error, Result};
 use sigstore_rekor::body::RekorEntryBody;
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{Bundle, Sha256Hash, SignatureBytes, SignatureContent, TransparencyLogEntry};
+use sigstore_types::{
+    Artifact, Bundle, Sha256Hash, SignatureBytes, SignatureContent, TransparencyLogEntry,
+};
 use x509_cert::der::Decode;
 use x509_cert::Certificate;
 
 /// Verify artifact hash matches what's in Rekor (for hashedrekord entries)
-pub fn verify_hashedrekord_entries(
-    bundle: &Bundle,
-    artifact: &[u8],
-    skip_artifact_hash: bool,
-) -> Result<()> {
+pub fn verify_hashedrekord_entries(bundle: &Bundle, artifact: &Artifact<'_>) -> Result<()> {
     for entry in &bundle.verification_material.tlog_entries {
         if entry.kind_version.kind == "hashedrekord" {
-            verify_hashedrekord_entry(entry, bundle, artifact, skip_artifact_hash)?;
+            verify_hashedrekord_entry(entry, bundle, artifact)?;
         }
     }
     Ok(())
@@ -28,8 +26,7 @@ pub fn verify_hashedrekord_entries(
 fn verify_hashedrekord_entry(
     entry: &TransparencyLogEntry,
     bundle: &Bundle,
-    artifact: &[u8],
-    skip_artifact_hash: bool,
+    artifact: &Artifact<'_>,
 ) -> Result<()> {
     // Parse the Rekor entry body (convert canonicalized body to base64 string)
     let body = RekorEntryBody::from_base64_json(
@@ -39,38 +36,32 @@ fn verify_hashedrekord_entry(
     )
     .map_err(|e| Error::Verification(format!("failed to parse Rekor body: {}", e)))?;
 
-    // If we are skipping artifact hash verification, we can skip this part
-    if !skip_artifact_hash {
-        // Extract expected artifact hash and validate
-        let artifact_hash_to_check =
-            get_artifact_hash(artifact, &bundle.content, skip_artifact_hash)?;
+    // Compute artifact hash from artifact (bytes or pre-computed digest)
+    let artifact_hash = compute_artifact_digest(artifact);
 
-        match &body {
-            RekorEntryBody::HashedRekordV001(rekord) => {
-                // v0.0.1: spec.data.hash.value (hex-encoded)
-                let expected =
-                    Sha256Hash::from_hex(rekord.spec.data.hash.value.as_str()).map_err(|e| {
-                        Error::Verification(format!("invalid hash in Rekor entry: {}", e))
-                    })?;
-                validate_artifact_hash(&artifact_hash_to_check, &expected)?;
-            }
-            RekorEntryBody::HashedRekordV002(rekord) => {
-                // v0.0.2: spec.hashedRekordV002.data.digest (Vec<u8>)
-                let expected =
-                    Sha256Hash::try_from_slice(&rekord.spec.hashed_rekord_v002.data.digest)
-                        .map_err(|e| {
-                            Error::Verification(format!("invalid digest in Rekor entry: {}", e))
-                        })?;
-                validate_artifact_hash(&artifact_hash_to_check, &expected)?;
-            }
-            _ => {
-                return Err(Error::Verification(format!(
-                    "expected HashedRekord body, got different type for version {}",
-                    entry.kind_version.version
-                )));
-            }
-        };
-    }
+    // Validate artifact hash matches what's in Rekor
+    match &body {
+        RekorEntryBody::HashedRekordV001(rekord) => {
+            // v0.0.1: spec.data.hash.value (hex-encoded)
+            let expected = Sha256Hash::from_hex(rekord.spec.data.hash.value.as_str())
+                .map_err(|e| Error::Verification(format!("invalid hash in Rekor entry: {}", e)))?;
+            validate_artifact_hash(&artifact_hash, &expected)?;
+        }
+        RekorEntryBody::HashedRekordV002(rekord) => {
+            // v0.0.2: spec.hashedRekordV002.data.digest (Vec<u8>)
+            let expected = Sha256Hash::try_from_slice(&rekord.spec.hashed_rekord_v002.data.digest)
+                .map_err(|e| {
+                    Error::Verification(format!("invalid digest in Rekor entry: {}", e))
+                })?;
+            validate_artifact_hash(&artifact_hash, &expected)?;
+        }
+        _ => {
+            return Err(Error::Verification(format!(
+                "expected HashedRekord body, got different type for version {}",
+                entry.kind_version.version
+            )));
+        }
+    };
 
     // Validate certificate matches
     validate_certificate_match(entry, &body, bundle)?;
@@ -86,40 +77,16 @@ fn verify_hashedrekord_entry(
     // certificate's private key over the artifact hash.
     // Uses verify_signature_prehashed with Digest::import_less_safe for proper
     // prehashed verification (avoiding double-hashing).
-    verify_signature_cryptographically(entry, &body, bundle, artifact, skip_artifact_hash)?;
+    verify_signature_cryptographically(entry, &body, bundle, artifact)?;
 
     Ok(())
 }
 
-/// Get artifact hash - either compute from artifact or extract from bundle digest
-fn get_artifact_hash(
-    artifact: &[u8],
-    content: &SignatureContent,
-    skip_artifact_hash: bool,
-) -> Result<Sha256Hash> {
-    if !artifact.is_empty() {
-        // We have the actual artifact, compute its hash
-        Ok(sigstore_crypto::sha256(artifact))
-    } else if skip_artifact_hash {
-        // DIGEST mode - extract hash from bundle's message signature
-        if let SignatureContent::MessageSignature(sig) = content {
-            if let Some(digest) = &sig.message_digest {
-                // digest.digest is already a Sha256Hash
-                Ok(digest.digest)
-            } else {
-                Err(Error::Verification(
-                    "no message digest in bundle for DIGEST mode".to_string(),
-                ))
-            }
-        } else {
-            // For DSSE envelopes in DIGEST mode, we can't validate the hashedrekord
-            // Return a dummy hash that won't match (validation will be skipped)
-            Ok(Sha256Hash::from_bytes([0u8; 32]))
-        }
-    } else {
-        Err(Error::Verification(
-            "no artifact provided and not in DIGEST mode".to_string(),
-        ))
+/// Compute the SHA-256 digest from an artifact
+fn compute_artifact_digest(artifact: &Artifact<'_>) -> Sha256Hash {
+    match artifact {
+        Artifact::Bytes(bytes) => sigstore_crypto::sha256(bytes),
+        Artifact::Digest(hash) => *hash,
     }
 }
 
@@ -234,8 +201,8 @@ fn validate_signature_match(
 /// not over the artifact's hash. The hash in the Rekor entry is used for lookup/deduplication.
 ///
 /// Verification strategy:
-/// - If we have the artifact: verify signature over the artifact using `verify_signature`
-/// - If we only have the digest (DIGEST mode):
+/// - If we have the artifact bytes: verify signature over the artifact using `verify_signature`
+/// - If we only have the digest:
 ///   - For SHA-256 schemes (P-256/SHA-256, RSA-PSS-SHA-256, etc.): Use prehashed verification
 ///     since Rekor stores SHA-256 hashes which match the signature's hash algorithm
 ///   - For SHA-384/512 schemes (P-384/SHA-384, etc.): Skip verification because Rekor's
@@ -245,8 +212,7 @@ fn verify_signature_cryptographically(
     _entry: &TransparencyLogEntry,
     body: &RekorEntryBody,
     bundle: &Bundle,
-    artifact: &[u8],
-    skip_artifact_hash: bool,
+    artifact: &Artifact<'_>,
 ) -> Result<()> {
     // Only verify for MessageSignature (not DSSE envelopes)
     if let SignatureContent::MessageSignature(_) = &bundle.content {
@@ -283,39 +249,12 @@ fn verify_signature_cryptographically(
             // Parse certificate to extract public key and algorithm
             let cert_info = sigstore_crypto::x509::parse_certificate_info(cert_der)?;
 
-            if skip_artifact_hash {
-                // DIGEST mode: We only have the hash, not the original artifact.
-                // We can only do prehashed verification if the scheme uses SHA-256
-                // (which matches what Rekor stores).
-                if cert_info.signing_scheme.uses_sha256()
-                    && cert_info.signing_scheme.supports_prehashed()
-                {
-                    // Extract the SHA-256 hash from the Rekor entry
-                    let hash =
-                        match body {
-                            RekorEntryBody::HashedRekordV001(rekord) => Sha256Hash::from_hex(
-                                rekord.spec.data.hash.value.as_str(),
-                            )
-                            .map_err(|e| {
-                                Error::Verification(format!("invalid hash in Rekor entry: {}", e))
-                            })?,
-                            RekorEntryBody::HashedRekordV002(rekord) => Sha256Hash::try_from_slice(
-                                &rekord.spec.hashed_rekord_v002.data.digest,
-                            )
-                            .map_err(|e| {
-                                Error::Verification(format!("invalid hash in Rekor entry: {}", e))
-                            })?,
-                            _ => return Ok(()),
-                        };
-
-                    tracing::debug!(
-                        "Using prehashed verification for {} in DIGEST mode",
-                        cert_info.signing_scheme.name()
-                    );
-
-                    sigstore_crypto::verification::verify_signature_prehashed(
+            match artifact {
+                Artifact::Bytes(bytes) => {
+                    // We have the artifact bytes - verify signature over them
+                    sigstore_crypto::verification::verify_signature(
                         &cert_info.public_key,
-                        &hash,
+                        bytes,
                         &signature_bytes,
                         cert_info.signing_scheme,
                     )
@@ -325,29 +264,39 @@ fn verify_signature_cryptographically(
                             e
                         ))
                     })?;
-                } else {
-                    // Scheme doesn't use SHA-256 or doesn't support prehashed verification.
-                    // We can't verify without the original artifact.
-                    tracing::debug!(
-                        "Skipping cryptographic signature verification for {} in DIGEST mode - \
-                         Rekor stores SHA-256 but scheme uses different hash algorithm",
-                        cert_info.signing_scheme.name()
-                    );
                 }
-            } else {
-                // We have the artifact - verify signature over it
-                sigstore_crypto::verification::verify_signature(
-                    &cert_info.public_key,
-                    artifact,
-                    &signature_bytes,
-                    cert_info.signing_scheme,
-                )
-                .map_err(|e| {
-                    Error::Verification(format!(
-                        "cryptographic signature verification failed: {}",
-                        e
-                    ))
-                })?;
+                Artifact::Digest(hash) => {
+                    // We only have the digest - use prehashed verification if supported
+                    if cert_info.signing_scheme.uses_sha256()
+                        && cert_info.signing_scheme.supports_prehashed()
+                    {
+                        tracing::debug!(
+                            "Using prehashed verification for {} with pre-computed digest",
+                            cert_info.signing_scheme.name()
+                        );
+
+                        sigstore_crypto::verification::verify_signature_prehashed(
+                            &cert_info.public_key,
+                            hash,
+                            &signature_bytes,
+                            cert_info.signing_scheme,
+                        )
+                        .map_err(|e| {
+                            Error::Verification(format!(
+                                "cryptographic signature verification failed: {}",
+                                e
+                            ))
+                        })?;
+                    } else {
+                        // Scheme doesn't use SHA-256 or doesn't support prehashed verification.
+                        // We can't verify without the original artifact.
+                        tracing::debug!(
+                            "Skipping cryptographic signature verification for {} with digest-only - \
+                             scheme uses different hash algorithm or doesn't support prehashed",
+                            cert_info.signing_scheme.name()
+                        );
+                    }
+                }
             }
         }
     }

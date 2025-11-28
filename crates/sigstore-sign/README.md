@@ -27,35 +27,48 @@ This crate provides high-level APIs for creating Sigstore signatures. It orchest
 ## Usage
 
 ```rust
-use sigstore_sign::{Signer, SigningConfig};
+use sigstore_sign::{SigningContext, Attestation, AttestationSubject};
+use sigstore_oidc::IdentityToken;
+use sigstore_types::Sha256Hash;
 
-let config = SigningConfig::production();
-let signer = Signer::new(config).await?;
+// Create a signing context for production
+let context = SigningContext::production();
 
-// Sign a blob
-let bundle = signer.sign(artifact_bytes).await?;
+// Get an identity token (from OIDC provider)
+let token = IdentityToken::new("your-identity-token".to_string());
 
-// Sign with a DSSE envelope
-let bundle = signer.sign_dsse(payload_type, payload).await?;
+// Create a signer
+let signer = context.signer(token);
+
+// Sign artifact bytes
+let artifact = b"hello world";
+let bundle = signer.sign(artifact).await?;
+
+// Or sign with a pre-computed digest (for large files)
+let digest = Sha256Hash::from_hex("b94d27b9...")?;
+let bundle = signer.sign(digest).await?;
+
+// Sign an in-toto attestation (DSSE envelope)
+let subject = AttestationSubject::new("artifact.tar.gz", digest);
+let attestation = Attestation::new("https://slsa.dev/provenance/v1")
+    .with_subject(subject)
+    .with_predicate(serde_json::json!({"key": "value"}));
+let bundle = signer.sign_attestation(attestation).await?;
+
+// Write bundle to file
+std::fs::write("artifact.sigstore.json", bundle.to_json_pretty()?)?;
 ```
 
 ## Configuration
 
 ```rust
-use sigstore_sign::SigningConfig;
+use sigstore_sign::SigningContext;
 
-// Production (default)
-let config = SigningConfig::production();
+// Production environment
+let context = SigningContext::production();
 
 // Staging environment
-let config = SigningConfig::staging();
-
-// Custom configuration
-let config = SigningConfig {
-    fulcio_url: "https://fulcio.example.com".into(),
-    rekor_url: "https://rekor.example.com".into(),
-    // ...
-};
+let context = SigningContext::staging();
 ```
 
 ## Related Crates

@@ -26,21 +26,25 @@ This crate provides high-level APIs for verifying Sigstore signatures. It handle
 ## Usage
 
 ```rust
-use sigstore_verify::{Verifier, VerificationPolicy};
+use sigstore_verify::{verify, Verifier, VerificationPolicy};
 use sigstore_trust_root::TrustedRoot;
+use sigstore_types::{Artifact, Bundle, Sha256Hash};
 
 let root = TrustedRoot::production()?;
+let bundle: Bundle = serde_json::from_str(bundle_json)?;
+let policy = VerificationPolicy::default();
+
+// Verify with raw artifact bytes
+let artifact_bytes = b"hello world";
+let result = verify(artifact_bytes.as_slice(), &bundle, &policy, &root)?;
+
+// Or verify with pre-computed SHA-256 digest (useful for large files)
+let digest = Sha256Hash::from_hex("b94d27b9...")?;
+let result = verify(digest, &bundle, &policy, &root)?;
+
+// Using the Verifier struct directly
 let verifier = Verifier::new(&root);
-
-// Basic verification
-verifier.verify(&bundle, artifact_bytes)?;
-
-// With identity policy
-let policy = VerificationPolicy::new()
-    .issuer("https://accounts.google.com")
-    .subject("user@example.com");
-
-verifier.verify_with_policy(&bundle, artifact_bytes, &policy)?;
+let result = verifier.verify(artifact_bytes.as_slice(), &bundle, &policy)?;
 ```
 
 ## Verification Policies
@@ -48,11 +52,18 @@ verifier.verify_with_policy(&bundle, artifact_bytes, &policy)?;
 ```rust
 use sigstore_verify::VerificationPolicy;
 
-let policy = VerificationPolicy::new()
-    // Exact match
-    .issuer("https://token.actions.githubusercontent.com")
-    // Regex pattern
-    .subject_regex(r"^https://github\.com/myorg/.*$")?;
+// Default policy (verify tlog, timestamps, and certificate chain)
+let policy = VerificationPolicy::default();
+
+// Require specific identity and issuer
+let policy = VerificationPolicy::default()
+    .require_identity("user@example.com")
+    .require_issuer("https://accounts.google.com");
+
+// Skip certain verifications (for testing only)
+let policy = VerificationPolicy::default()
+    .skip_tlog()
+    .skip_certificate_chain();
 ```
 
 ## Related Crates

@@ -2,6 +2,7 @@
 
 use aws_lc_rs::digest::{self, Context, SHA256};
 use sigstore_types::Sha256Hash;
+use std::io::{self, Read};
 
 /// Hash data using SHA-256, returning a typed hash
 pub fn sha256(data: &[u8]) -> Sha256Hash {
@@ -44,6 +45,31 @@ impl Default for Sha256Hasher {
     }
 }
 
+/// Compute SHA-256 hash by reading from a reader (streaming, constant memory)
+///
+/// This is useful for hashing large files without loading them entirely into memory.
+///
+/// # Example
+/// ```no_run
+/// use std::fs::File;
+/// use sigstore_crypto::sha256_reader;
+///
+/// let file = File::open("large-file.tar.gz").unwrap();
+/// let hash = sha256_reader(file).unwrap();
+/// ```
+pub fn sha256_reader(mut reader: impl Read) -> io::Result<Sha256Hash> {
+    let mut hasher = Sha256Hasher::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher.finalize())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,6 +94,18 @@ mod tests {
         let hash = hasher.finalize();
 
         let direct = sha256(b"hello");
+        assert_eq!(hash, direct);
+    }
+
+    #[test]
+    fn test_sha256_reader() {
+        use std::io::Cursor;
+
+        let data = b"hello world, this is a test of streaming hash";
+        let cursor = Cursor::new(data);
+        let hash = sha256_reader(cursor).unwrap();
+
+        let direct = sha256(data);
         assert_eq!(hash, direct);
     }
 }

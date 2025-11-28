@@ -7,9 +7,12 @@ use sigstore_bundle::{BundleV03, TlogEntryBuilder};
 use sigstore_crypto::{KeyPair, SigningScheme};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::IdentityToken;
-use sigstore_rekor::{HashedRekord, RekorClient};
+use sigstore_rekor::{DsseEntry, HashedRekord, RekorClient};
 use sigstore_tsa::TimestampClient;
-use sigstore_types::{Bundle, DerCertificate, SignatureBytes, TimestampToken};
+use sigstore_types::{
+    Artifact, Bundle, DerCertificate, DsseEnvelope, DsseSignature, KeyId, PayloadBytes, Sha256Hash,
+    SignatureBytes, Subject, TimestampToken,
+};
 
 /// Configuration for signing operations
 #[derive(Debug, Clone)]
@@ -112,15 +115,18 @@ pub struct Signer {
 }
 
 impl Signer {
-    /// Sign an artifact and return a Sigstore bundle
+    /// Sign an artifact and return a Sigstore bundle (hashedrekord format)
     ///
-    /// # Arguments
-    /// * `artifact` - The artifact bytes to sign
+    /// This creates a hashedrekord bundle that includes a signature over the artifact.
+    /// The artifact can be provided as raw bytes or as an `Artifact` enum.
     ///
-    /// # Returns
-    /// A complete Sigstore bundle containing the signature, certificate chain, and transparency log entry
+    /// **Note:** For hashedrekord bundles, the raw artifact bytes are required to create
+    /// the signature. If you only have a pre-computed digest and don't need to sign the
+    /// raw bytes, use [`sign_attestation`](Self::sign_attestation) instead to create a
+    /// DSSE/in-toto attestation bundle.
     ///
     /// # Example
+    ///
     /// ```no_run
     /// use sigstore_sign::{SigningContext, Signer};
     /// use sigstore_oidc::IdentityToken;
@@ -130,11 +136,26 @@ impl Signer {
     /// let token = IdentityToken::new("your-token-here".to_string());
     /// let signer = context.signer(token);
     /// let artifact = b"hello world";
-    /// let bundle = signer.sign(artifact).await?;
+    /// let bundle = signer.sign(artifact.as_slice()).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn sign(&self, artifact: &[u8]) -> Result<Bundle> {
+    pub async fn sign<'a>(&self, artifact: impl Into<Artifact<'a>>) -> Result<Bundle> {
+        let artifact = artifact.into();
+
+        // For hashedrekord bundles, we need the raw bytes to sign
+        let bytes = match &artifact {
+            Artifact::Bytes(b) => *b,
+            Artifact::Digest(_) => {
+                return Err(Error::Signing(
+                    "Cannot create hashedrekord bundle with only a digest. \
+                     The raw artifact bytes are required to create the signature. \
+                     Use sign_attestation() to create a DSSE bundle with just a digest."
+                        .to_string(),
+                ));
+            }
+        };
+
         // 1. Generate ephemeral key pair
         let key_pair = self.generate_ephemeral_keypair()?;
 
@@ -142,11 +163,11 @@ impl Signer {
         let leaf_cert_der = self.request_certificate(&key_pair).await?;
 
         // 3. Sign the artifact
-        let signature = key_pair.sign(artifact)?;
+        let signature = key_pair.sign(bytes)?;
 
         // 4. Create Rekor entry (with certificate, not just public key)
         let tlog_entry = self
-            .create_rekor_entry(artifact, &signature, &leaf_cert_der)
+            .create_rekor_entry(bytes, &signature, &leaf_cert_der)
             .await?;
 
         // 5. Get timestamp from TSA (optional)
@@ -157,7 +178,7 @@ impl Signer {
         };
 
         // 6. Build bundle
-        let artifact_hash = sigstore_crypto::sha256(artifact);
+        let artifact_hash = sigstore_crypto::sha256(bytes);
         let mut bundle =
             BundleV03::with_certificate_and_signature(leaf_cert_der, signature, artifact_hash)
                 .with_tlog_entry(tlog_entry.build());
@@ -235,6 +256,206 @@ impl Signer {
         tsa.timestamp_signature(signature)
             .await
             .map_err(|e| Error::Signing(format!("Failed to get timestamp: {}", e)))
+    }
+
+    /// Sign an attestation (DSSE envelope with in-toto statement)
+    ///
+    /// This creates a GitHub-style attestation bundle with a DSSE envelope containing
+    /// an in-toto statement. Unlike `sign()`, this method doesn't need the raw artifact
+    /// bytes - only the artifact name and digest.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sigstore_sign::{SigningContext, Attestation};
+    /// use sigstore_oidc::IdentityToken;
+    /// use sigstore_types::Sha256Hash;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let context = SigningContext::production();
+    /// let token = IdentityToken::new("your-token-here".to_string());
+    /// let signer = context.signer(token);
+    ///
+    /// // Create attestation with pre-computed digest (no raw bytes needed!)
+    /// let digest = Sha256Hash::from_hex("54303491a8418fbed24344b51354618c29b43bf282ceb433af65e2299f9271f")?;
+    /// let attestation = Attestation::new(
+    ///     "https://example.com/attestation-type/v1",
+    ///     serde_json::json!({"key": "value"})
+    /// )
+    /// .add_subject("my-package-1.0.0.tar.gz", digest);
+    ///
+    /// let bundle = signer.sign_attestation(attestation).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn sign_attestation(&self, attestation: Attestation) -> Result<Bundle> {
+        // 1. Generate ephemeral key pair
+        let key_pair = self.generate_ephemeral_keypair()?;
+
+        // 2. Get signing certificate from Fulcio
+        let leaf_cert_der = self.request_certificate(&key_pair).await?;
+
+        // 3. Build the in-toto statement
+        let statement = attestation.build_statement();
+        let statement_json = serde_json::to_string(&statement)
+            .map_err(|e| Error::Signing(format!("Failed to serialize statement: {}", e)))?;
+
+        // 4. Create DSSE envelope and sign it
+        let payload_type = "application/vnd.in-toto+json".to_string();
+        let payload = PayloadBytes::from_bytes(statement_json.as_bytes());
+
+        // Compute PAE and sign it
+        let pae = sigstore_types::pae(&payload_type, statement_json.as_bytes());
+        let signature = key_pair.sign(&pae)?;
+
+        let dsse_envelope = DsseEnvelope::new(
+            payload_type,
+            payload,
+            vec![DsseSignature {
+                sig: signature.clone(),
+                keyid: KeyId::default(),
+            }],
+        );
+
+        // 5. Create DSSE Rekor entry
+        let tlog_entry = self
+            .create_dsse_rekor_entry(&dsse_envelope, &leaf_cert_der)
+            .await?;
+
+        // 6. Get timestamp from TSA (optional)
+        let timestamp = if let Some(tsa_url) = &self.tsa_url {
+            Some(self.request_timestamp(tsa_url, &signature).await?)
+        } else {
+            None
+        };
+
+        // 7. Build bundle with DSSE envelope
+        let mut bundle = BundleV03::with_certificate_and_dsse(leaf_cert_der, dsse_envelope)
+            .with_tlog_entry(tlog_entry.build());
+
+        if let Some(ts) = timestamp {
+            bundle = bundle.with_rfc3161_timestamp(ts);
+        }
+
+        Ok(bundle.into_bundle())
+    }
+
+    /// Create a DSSE Rekor entry
+    async fn create_dsse_rekor_entry(
+        &self,
+        envelope: &DsseEnvelope,
+        certificate: &DerCertificate,
+    ) -> Result<TlogEntryBuilder> {
+        // Create DSSE entry
+        let dsse_entry = DsseEntry::new(envelope, certificate);
+
+        // Create Rekor client and upload
+        let rekor = RekorClient::new(&self.rekor_url);
+        let log_entry = rekor
+            .create_dsse_entry(dsse_entry)
+            .await
+            .map_err(|e| Error::Signing(format!("Failed to create DSSE Rekor entry: {}", e)))?;
+
+        // Build TlogEntry from the log entry response
+        let tlog_builder = TlogEntryBuilder::from_log_entry(&log_entry, "dsse", "0.0.1");
+
+        Ok(tlog_builder)
+    }
+}
+
+/// An attestation to be signed (in-toto statement)
+///
+/// Attestations are used to make claims about artifacts without needing the raw
+/// artifact bytes. Each attestation contains:
+/// - One or more subjects (artifacts) identified by name and digest
+/// - A predicate type URI identifying the attestation format
+/// - The predicate content (attestation-specific data)
+///
+/// # Example
+///
+/// ```
+/// use sigstore_sign::Attestation;
+/// use sigstore_types::Sha256Hash;
+///
+/// let digest = Sha256Hash::from_hex(
+///     "54303491a8418fbed24344b51354618c29b43bf282ceb433af65e2299f9271ff"
+/// ).unwrap();
+///
+/// let attestation = Attestation::new(
+///     "https://slsa.dev/provenance/v1",
+///     serde_json::json!({
+///         "buildType": "https://example.com/build/v1",
+///         "builder": {"id": "https://github.com/actions/runner"}
+///     })
+/// )
+/// .add_subject("my-package-1.0.0.tar.gz", digest);
+/// ```
+#[derive(Debug, Clone)]
+pub struct Attestation {
+    /// Subjects (artifacts being attested about)
+    subjects: Vec<AttestationSubject>,
+    /// Predicate type URI
+    predicate_type: String,
+    /// Predicate content
+    predicate: serde_json::Value,
+}
+
+/// A subject in an attestation
+#[derive(Debug, Clone)]
+pub struct AttestationSubject {
+    /// Name of the artifact
+    pub name: String,
+    /// SHA-256 digest of the artifact
+    pub digest: Sha256Hash,
+}
+
+impl Attestation {
+    /// Create a new attestation with the given predicate type and content
+    pub fn new(predicate_type: impl Into<String>, predicate: serde_json::Value) -> Self {
+        Self {
+            subjects: Vec::new(),
+            predicate_type: predicate_type.into(),
+            predicate,
+        }
+    }
+
+    /// Add a subject to the attestation
+    pub fn add_subject(mut self, name: impl Into<String>, digest: Sha256Hash) -> Self {
+        self.subjects.push(AttestationSubject {
+            name: name.into(),
+            digest,
+        });
+        self
+    }
+
+    /// Add multiple subjects at once
+    pub fn with_subjects(mut self, subjects: Vec<(String, Sha256Hash)>) -> Self {
+        for (name, digest) in subjects {
+            self.subjects.push(AttestationSubject { name, digest });
+        }
+        self
+    }
+
+    /// Build the in-toto statement
+    fn build_statement(&self) -> sigstore_types::Statement {
+        use sigstore_types::Digest;
+
+        sigstore_types::Statement {
+            type_: "https://in-toto.io/Statement/v1".to_string(),
+            subject: self
+                .subjects
+                .iter()
+                .map(|s| Subject {
+                    name: s.name.clone(),
+                    digest: Digest {
+                        sha256: Some(s.digest.to_hex()),
+                        sha512: None,
+                    },
+                })
+                .collect(),
+            predicate_type: self.predicate_type.clone(),
+            predicate: self.predicate.clone(),
+        }
     }
 }
 

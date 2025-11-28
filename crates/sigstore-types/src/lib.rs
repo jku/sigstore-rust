@@ -3,6 +3,7 @@
 //! This crate provides the fundamental data structures used throughout the Sigstore
 //! ecosystem, including bundle formats, transparency log entries, and trust roots.
 
+pub mod artifact;
 pub mod bundle;
 pub mod checkpoint;
 pub mod dsse;
@@ -11,6 +12,7 @@ pub mod error;
 pub mod hash;
 pub mod intoto;
 
+pub use artifact::Artifact;
 pub use bundle::{
     Bundle, BundleVersion, CheckpointData, InclusionPromise, InclusionProof, KindVersion, LogId,
     MediaType, MessageDigest, MessageSignature, SignatureContent, TransparencyLogEntry,

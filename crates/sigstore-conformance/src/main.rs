@@ -12,7 +12,7 @@ use sigstore_oidc::IdentityToken;
 use sigstore_rekor::RekorClient;
 use sigstore_trust_root::TrustedRoot;
 use sigstore_tsa::TimestampClient;
-use sigstore_types::{Bundle, SignatureContent};
+use sigstore_types::{Bundle, Sha256Hash, SignatureContent};
 use sigstore_verify::{verify, VerificationPolicy};
 
 use std::env;
@@ -382,12 +382,12 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .into());
         }
 
-        // Create a policy that skips artifact hash validation since we already checked it
-        let digest_policy = policy.skip_artifact_hash();
-        let dummy_artifact = vec![];
+        // Convert digest bytes to Sha256Hash for verification
+        let artifact_digest = Sha256Hash::try_from_slice(&digest_bytes)
+            .map_err(|e| format!("Invalid digest: {}", e))?;
 
-        // Verify the signature with trusted root
-        let result = verify(&dummy_artifact, &bundle, &digest_policy, &trusted_root)?;
+        // Verify the signature with trusted root using the digest directly
+        let result = verify(artifact_digest, &bundle, &policy, &trusted_root)?;
 
         if !result.success {
             return Err("Verification failed".into());

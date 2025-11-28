@@ -8,7 +8,7 @@ use sigstore_bundle::ValidationOptions;
 use sigstore_crypto::parse_certificate_info;
 use sigstore_trust_root::TrustedRoot;
 
-use sigstore_types::{Bundle, SignatureContent, Statement};
+use sigstore_types::{Artifact, Bundle, Sha256Hash, SignatureContent, Statement};
 
 /// Default clock skew tolerance in seconds (60 seconds = 1 minute)
 pub const DEFAULT_CLOCK_SKEW_SECONDS: i64 = 60;
@@ -26,8 +26,6 @@ pub struct VerificationPolicy {
     pub verify_timestamp: bool,
     /// Verify certificate chain
     pub verify_certificate: bool,
-    /// Skip artifact hash validation (for digest-only verification)
-    pub skip_artifact_hash: bool,
     /// Clock skew tolerance in seconds for time validation
     ///
     /// This allows for a tolerance when checking that integrated times
@@ -43,7 +41,6 @@ impl Default for VerificationPolicy {
             verify_tlog: true,
             verify_timestamp: true,
             verify_certificate: true,
-            skip_artifact_hash: false,
             clock_skew_seconds: DEFAULT_CLOCK_SKEW_SECONDS,
         }
     }
@@ -96,12 +93,6 @@ impl VerificationPolicy {
     /// with bundles that don't chain to the trusted root.
     pub fn skip_certificate_chain(mut self) -> Self {
         self.verify_certificate = false;
-        self
-    }
-
-    /// Skip artifact hash validation (for digest-only verification)
-    pub fn skip_artifact_hash(mut self) -> Self {
-        self.skip_artifact_hash = true;
         self
     }
 
@@ -173,6 +164,34 @@ impl Verifier {
 
     /// Verify an artifact against a bundle
     ///
+    /// The artifact can be provided as raw bytes or as a pre-computed SHA-256 digest.
+    /// When using a pre-computed digest, the raw bytes are not needed, which is useful
+    /// for large files or when the digest is already known (e.g., from a registry).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sigstore_verify::{Verifier, VerificationPolicy};
+    /// use sigstore_trust_root::TrustedRoot;
+    /// use sigstore_types::{Artifact, Bundle, Sha256Hash};
+    ///
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let trusted_root = TrustedRoot::production()?;
+    /// let verifier = Verifier::new(&trusted_root);
+    /// let bundle: Bundle = todo!();
+    /// let policy = VerificationPolicy::default();
+    ///
+    /// // Option 1: Verify with raw bytes
+    /// let artifact_bytes = b"hello world";
+    /// verifier.verify(artifact_bytes.as_slice(), &bundle, &policy)?;
+    ///
+    /// // Option 2: Verify with pre-computed digest (no raw bytes needed!)
+    /// let digest = Sha256Hash::from_hex("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")?;
+    /// verifier.verify(digest, &bundle, &policy)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// In order to verify an artifact, we need to achieve the following:
     ///
     /// 0. Establish a time for the signature.
@@ -190,12 +209,13 @@ impl Verifier {
     ///    public key.
     /// 8. Verify the transparency log entry's consistency against the other
     ///    materials, to prevent variants of CVE-2022-36056.
-    pub fn verify(
+    pub fn verify<'a>(
         &self,
-        artifact: &[u8],
+        artifact: impl Into<Artifact<'a>>,
         bundle: &Bundle,
         policy: &VerificationPolicy,
     ) -> Result<VerificationResult> {
+        let artifact = artifact.into();
         let mut result = VerificationResult::success();
 
         // Validate bundle structure first
@@ -323,11 +343,10 @@ impl Verifier {
             }
 
             // Verify artifact hash matches (for DSSE with in-toto statements)
-            if !policy.skip_artifact_hash && envelope.payload_type == "application/vnd.in-toto+json"
-            {
+            if envelope.payload_type == "application/vnd.in-toto+json" {
                 let payload_bytes = envelope.payload.as_bytes();
 
-                let artifact_hash = sigstore_crypto::sha256(artifact);
+                let artifact_hash = compute_artifact_digest(&artifact);
                 let artifact_hash_hex = artifact_hash.to_hex();
 
                 let payload_str = std::str::from_utf8(payload_bytes).map_err(|e| {
@@ -353,13 +372,17 @@ impl Verifier {
         //      materials, to prevent variants of CVE-2022-36056.
         crate::verify_impl::verify_dsse_entries(bundle)?;
         crate::verify_impl::verify_intoto_entries(bundle)?;
-        crate::verify_impl::verify_hashedrekord_entries(
-            bundle,
-            artifact,
-            policy.skip_artifact_hash,
-        )?;
+        crate::verify_impl::verify_hashedrekord_entries(bundle, &artifact)?;
 
         Ok(result)
+    }
+}
+
+/// Compute the SHA-256 digest from an artifact
+fn compute_artifact_digest(artifact: &Artifact<'_>) -> Sha256Hash {
+    match artifact {
+        Artifact::Bytes(bytes) => sigstore_crypto::sha256(bytes),
+        Artifact::Digest(hash) => *hash,
     }
 }
 
@@ -367,8 +390,12 @@ impl Verifier {
 ///
 /// This uses the trusted root for all cryptographic material
 /// (Rekor keys, Fulcio certs, TSA certs).
-pub fn verify(
-    artifact: &[u8],
+///
+/// The artifact can be provided as raw bytes or as a pre-computed SHA-256 digest:
+/// - `verify(artifact_bytes, ...)` - pass raw bytes
+/// - `verify(Sha256Hash::from_hex("...")?, ...)` - pass pre-computed digest
+pub fn verify<'a>(
+    artifact: impl Into<Artifact<'a>>,
     bundle: &Bundle,
     policy: &VerificationPolicy,
     trusted_root: &TrustedRoot,

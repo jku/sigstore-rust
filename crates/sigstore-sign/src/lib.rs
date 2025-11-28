@@ -35,4 +35,6 @@ pub use sigstore_tsa as tsa;
 pub use sigstore_types as types;
 
 pub use error::{Error, Result};
-pub use sign::{sign_context, Signer, SigningConfig, SigningContext};
+pub use sign::{
+    sign_context, Attestation, AttestationSubject, Signer, SigningConfig, SigningContext,
+};

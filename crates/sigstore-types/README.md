@@ -10,6 +10,7 @@ This is the base crate with no dependencies on other sigstore crates. All other 
 
 ## Features
 
+- **Artifact type**: `Artifact` enum for representing artifacts as bytes or pre-computed digests
 - **Bundle types**: `Bundle`, `TransparencyLogEntry`, `VerificationMaterial`, `InclusionProof`
 - **Checkpoint parsing**: `Checkpoint`, `CheckpointSignature` for signed tree heads
 - **DSSE support**: `DsseEnvelope`, `DsseSignature` for Dead Simple Signing Envelope format
@@ -20,13 +21,21 @@ This is the base crate with no dependencies on other sigstore crates. All other 
 ## Usage
 
 ```rust
-use sigstore_types::{Bundle, Checkpoint};
+use sigstore_types::{Artifact, Bundle, Checkpoint, Sha256Hash};
 
 // Parse a Sigstore bundle
 let bundle: Bundle = serde_json::from_str(bundle_json)?;
 
 // Parse a checkpoint (signed tree head)
 let checkpoint = Checkpoint::from_text(checkpoint_text)?;
+
+// Create an artifact from bytes
+let artifact = Artifact::Bytes(b"hello world");
+
+// Create an artifact from a pre-computed SHA-256 digest
+// (useful for large files where you don't want to load the entire file into memory)
+let digest = Sha256Hash::from_hex("b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9")?;
+let artifact = Artifact::Digest(digest);
 ```
 
 ## Related Crates
