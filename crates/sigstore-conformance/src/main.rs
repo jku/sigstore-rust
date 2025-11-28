@@ -8,7 +8,7 @@
 use sigstore_bundle::{BundleV03, TlogEntryBuilder};
 use sigstore_crypto::KeyPair;
 use sigstore_fulcio::FulcioClient;
-use sigstore_oidc::parse_identity_token;
+use sigstore_oidc::IdentityToken;
 use sigstore_rekor::RekorClient;
 use sigstore_trust_root::TrustedRoot;
 use sigstore_tsa::TimestampClient;
@@ -173,20 +173,16 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     // Read artifact
     let artifact_data = fs::read(&artifact_path)?;
 
-    // Parse identity token to extract email or subject
-    let token_info = parse_identity_token(&identity_token)?;
-    let subject = token_info.email().unwrap_or(token_info.subject());
+    // Parse identity token
+    let identity_token = IdentityToken::from_jwt(&identity_token)?;
 
     // Generate ephemeral key pair
     let key_pair = KeyPair::generate_ecdsa_p256()?;
-    let public_key_pem = key_pair.public_key_to_pem()?;
 
     // Get signing certificate from Fulcio
     let fulcio_client = FulcioClient::new(&fulcio_url);
-
-    let proof_of_possession = key_pair.sign(subject.as_bytes())?;
     let cert_response = fulcio_client
-        .create_signing_certificate(&identity_token, &public_key_pem, &proof_of_possession)
+        .create_signing_certificate(&identity_token, &key_pair)
         .await?;
 
     // Get the leaf certificate (v0.3 bundles use single cert, not chain)

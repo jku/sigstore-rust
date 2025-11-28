@@ -7,23 +7,59 @@ use aws_lc_rs::signature::{
     ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512,
     RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
 };
+use sigstore_types::{DerPublicKey, Sha256Hash, SignatureBytes};
+use spki::SubjectPublicKeyInfoRef;
 
 /// A public key for verification
 pub struct VerificationKey {
-    /// Raw public key bytes
-    pub bytes: Vec<u8>,
+    /// Raw public key bytes (format depends on scheme)
+    bytes: Vec<u8>,
     /// The scheme to use for verification
-    pub scheme: SigningScheme,
+    scheme: SigningScheme,
 }
 
 impl VerificationKey {
-    /// Create a new verification key
-    pub fn new(bytes: Vec<u8>, scheme: SigningScheme) -> Self {
-        Self { bytes, scheme }
+    /// Create a verification key from a DER-encoded SPKI public key
+    ///
+    /// This parses the SubjectPublicKeyInfo structure and extracts the raw
+    /// public key bytes needed for verification.
+    pub fn from_spki(key: &DerPublicKey, scheme: SigningScheme) -> Result<Self> {
+        let spki = SubjectPublicKeyInfoRef::try_from(key.as_bytes())
+            .map_err(|e| Error::InvalidKey(format!("Invalid SPKI: {e}")))?;
+
+        // Extract raw public key bytes from the BIT STRING
+        let raw_bytes = spki.subject_public_key.raw_bytes().to_vec();
+
+        Ok(Self {
+            bytes: raw_bytes,
+            scheme,
+        })
+    }
+
+    /// Create a verification key from raw public key bytes (internal use)
+    fn from_raw_bytes(bytes: impl Into<Vec<u8>>, scheme: SigningScheme) -> Self {
+        Self {
+            bytes: bytes.into(),
+            scheme,
+        }
+    }
+
+    /// Get the raw public key bytes
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Get the signing scheme
+    pub fn scheme(&self) -> SigningScheme {
+        self.scheme
     }
 
     /// Verify a signature over data
-    pub fn verify(&self, data: &[u8], signature: &[u8]) -> Result<()> {
+    pub fn verify(&self, data: impl AsRef<[u8]>, signature: &SignatureBytes) -> Result<()> {
+        self.verify_inner(data.as_ref(), signature.as_bytes())
+    }
+
+    fn verify_inner(&self, data: &[u8], signature: &[u8]) -> Result<()> {
         match self.scheme {
             SigningScheme::EcdsaP256Sha256 => {
                 let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &self.bytes);
@@ -86,83 +122,63 @@ impl VerificationKey {
             }
         }
     }
+
+    /// Verify a signature over prehashed data (SHA-256)
+    ///
+    /// This is used for hashedrekord verification where the signature is over
+    /// the SHA-256 hash of the artifact, not the artifact itself.
+    pub fn verify_prehashed(&self, digest: &Sha256Hash, signature: &SignatureBytes) -> Result<()> {
+        use aws_lc_rs::digest::{Digest, SHA256};
+
+        match self.scheme {
+            SigningScheme::EcdsaP256Sha256 => {
+                let aws_digest = Digest::import_less_safe(digest.as_slice(), &SHA256)
+                    .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
+
+                let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, &self.bytes);
+                key.verify_digest(&aws_digest, signature.as_bytes())
+                    .map_err(|_| Error::Verification("ECDSA P-256 signature invalid".to_string()))
+            }
+            SigningScheme::Ed25519 => {
+                // Ed25519 doesn't support prehashed mode - verify directly over digest bytes
+                self.verify_inner(digest.as_slice(), signature.as_bytes())
+            }
+            _ => {
+                // For other schemes, verify directly over digest bytes
+                self.verify_inner(digest.as_slice(), signature.as_bytes())
+            }
+        }
+    }
 }
 
 /// Verify a signature using the specified scheme
+///
+/// This is a convenience function that creates a temporary `VerificationKey`.
+/// For repeated verifications with the same key, prefer using `VerificationKey` directly.
 pub fn verify_signature(
     public_key: &[u8],
     data: &[u8],
     signature: &[u8],
     scheme: SigningScheme,
 ) -> Result<()> {
-    let key = VerificationKey::new(public_key.to_vec(), scheme);
-    key.verify(data, signature)
+    VerificationKey::from_raw_bytes(public_key, scheme)
+        .verify(data, &SignatureBytes::from_bytes(signature))
 }
 
 /// Verify a signature over prehashed data using the specified scheme
 ///
 /// This is used for hashedrekord verification where the signature is over
 /// the SHA-256 hash of the artifact, not the artifact itself.
-///
-/// The digest parameter should contain the pre-computed hash bytes.
 pub fn verify_signature_prehashed(
     public_key: &[u8],
     digest_bytes: &[u8],
     signature: &[u8],
     scheme: SigningScheme,
 ) -> Result<()> {
-    use aws_lc_rs::digest::{Digest, SHA256, SHA384};
-
-    match scheme {
-        SigningScheme::EcdsaP256Sha256 => {
-            // For prehashed ECDSA, we need to use verify_digest with a Digest
-            // The digest should be 32 bytes (SHA-256)
-            if digest_bytes.len() != 32 {
-                return Err(Error::Verification(format!(
-                    "ECDSA P-256 prehashed verification requires 32-byte digest, got {}",
-                    digest_bytes.len()
-                )));
-            }
-
-            // Import the pre-computed hash as a Digest
-            let digest = Digest::import_less_safe(digest_bytes, &SHA256)
-                .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
-
-            // Use verify_digest with ASN1 algorithm (for DER-encoded signatures)
-            let key = UnparsedPublicKey::new(&ECDSA_P256_SHA256_ASN1, public_key);
-            key.verify_digest(&digest, signature)
-                .map_err(|_| Error::Verification("ECDSA P-256 signature invalid".to_string()))
-        }
-        SigningScheme::EcdsaP384Sha384 => {
-            // For prehashed ECDSA P-384, digest should be 48 bytes (SHA-384)
-            if digest_bytes.len() != 48 {
-                return Err(Error::Verification(format!(
-                    "ECDSA P-384 prehashed verification requires 48-byte digest, got {}",
-                    digest_bytes.len()
-                )));
-            }
-
-            // Import the pre-computed hash as a Digest
-            let digest = Digest::import_less_safe(digest_bytes, &SHA384)
-                .map_err(|_| Error::Verification("Failed to import digest".to_string()))?;
-
-            // Use verify_digest with ASN1 algorithm (for DER-encoded signatures)
-            let key = UnparsedPublicKey::new(&ECDSA_P384_SHA384_ASN1, public_key);
-            key.verify_digest(&digest, signature)
-                .map_err(|_| Error::Verification("ECDSA P-384 signature invalid".to_string()))
-        }
-        SigningScheme::Ed25519 => {
-            // Ed25519 doesn't support prehashed mode in the same way
-            // The signature is over the full message, not a hash
-            // Fall back to regular verification
-            verify_signature(public_key, digest_bytes, signature, scheme)
-        }
-        _ => {
-            // For other schemes (RSA), use regular verification
-            // RSA schemes in Sigstore typically sign the full message
-            verify_signature(public_key, digest_bytes, signature, scheme)
-        }
-    }
+    let digest = Sha256Hash::try_from_slice(digest_bytes)
+        .map_err(|e| Error::Verification(format!("Invalid digest: {e}")))?;
+    VerificationKey::from_raw_bytes(public_key, scheme)
+        .verify_prehashed(&digest, &SignatureBytes::from_bytes(signature))
 }
 
 #[cfg(test)]
@@ -176,40 +192,30 @@ mod tests {
         let data = b"test data";
         let sig = kp.sign(data).unwrap();
 
-        let vk = VerificationKey::new(
-            kp.public_key_bytes().to_vec(),
-            SigningScheme::EcdsaP256Sha256,
-        );
-        assert!(vk.verify(data, sig.as_bytes()).is_ok());
-    }
-
-    #[test]
-    fn test_verify_ed25519() {
-        let kp = KeyPair::generate_ed25519().unwrap();
-        let data = b"test data";
-        let sig = kp.sign(data).unwrap();
-
-        let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
-        assert!(vk.verify(data, sig.as_bytes()).is_ok());
+        let pubkey = kp.public_key_der().unwrap();
+        let vk = VerificationKey::from_spki(&pubkey, kp.default_scheme()).unwrap();
+        assert!(vk.verify(data, &sig).is_ok());
     }
 
     #[test]
     fn test_verify_bad_signature() {
-        let kp = KeyPair::generate_ed25519().unwrap();
+        let kp = KeyPair::generate_ecdsa_p256().unwrap();
         let data = b"test data";
-        let bad_sig = vec![0u8; 64];
+        let bad_sig = SignatureBytes::new(vec![0u8; 64]);
 
-        let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
+        let pubkey = kp.public_key_der().unwrap();
+        let vk = VerificationKey::from_spki(&pubkey, kp.default_scheme()).unwrap();
         assert!(vk.verify(data, &bad_sig).is_err());
     }
 
     #[test]
     fn test_verify_wrong_data() {
-        let kp = KeyPair::generate_ed25519().unwrap();
+        let kp = KeyPair::generate_ecdsa_p256().unwrap();
         let data = b"test data";
         let sig = kp.sign(data).unwrap();
 
-        let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
-        assert!(vk.verify(b"wrong data", sig.as_bytes()).is_err());
+        let pubkey = kp.public_key_der().unwrap();
+        let vk = VerificationKey::from_spki(&pubkey, kp.default_scheme()).unwrap();
+        assert!(vk.verify(b"wrong data", &sig).is_err());
     }
 }

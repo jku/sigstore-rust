@@ -2,7 +2,7 @@
 
 use crate::asn1::{AlgorithmIdentifier, Asn1MessageImprint, TimeStampReq, TimeStampResp};
 use crate::error::{Error, Result};
-use sigstore_crypto::Signature;
+use sigstore_types::SignatureBytes;
 use sigstore_types::TimestampToken;
 
 /// A client for interacting with a Time-Stamp Authority
@@ -95,7 +95,7 @@ impl TimestampClient {
     /// Request a timestamp for a signature
     ///
     /// This is the most common use case - timestamps the SHA-256 hash of the signature bytes.
-    pub async fn timestamp_signature(&self, signature: &Signature) -> Result<TimestampToken> {
+    pub async fn timestamp_signature(&self, signature: &SignatureBytes) -> Result<TimestampToken> {
         let digest = sigstore_crypto::sha256(signature.as_bytes());
         self.timestamp(digest.as_bytes(), AlgorithmIdentifier::sha256())
             .await

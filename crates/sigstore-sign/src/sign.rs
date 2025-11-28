@@ -4,12 +4,12 @@
 
 use crate::error::{Error, Result};
 use sigstore_bundle::{BundleV03, TlogEntryBuilder};
-use sigstore_crypto::{KeyPair, Signature, SigningScheme};
+use sigstore_crypto::{KeyPair, SigningScheme};
 use sigstore_fulcio::FulcioClient;
-use sigstore_oidc::{parse_identity_token, IdentityToken};
+use sigstore_oidc::IdentityToken;
 use sigstore_rekor::{HashedRekord, RekorClient};
 use sigstore_tsa::TimestampClient;
-use sigstore_types::{Bundle, DerCertificate, TimestampToken};
+use sigstore_types::{Bundle, DerCertificate, SignatureBytes, TimestampToken};
 
 /// Configuration for signing operations
 #[derive(Debug, Clone)]
@@ -186,26 +186,10 @@ impl Signer {
     ///
     /// Returns the leaf certificate as DerCertificate.
     async fn request_certificate(&self, key_pair: &KeyPair) -> Result<DerCertificate> {
-        // Parse identity token to extract email or subject
-        let token_info = parse_identity_token(self.identity_token.raw())?;
-        let subject = token_info.email().unwrap_or(token_info.subject());
-
-        // Export public key to PEM
-        let public_key_pem = key_pair
-            .public_key_to_pem()
-            .map_err(|e| Error::Signing(format!("Failed to export public key: {}", e)))?;
-
-        // Create proof of possession
-        let proof_of_possession = key_pair.sign(subject.as_bytes())?;
-
         // Create Fulcio client and request certificate
         let fulcio = FulcioClient::new(&self.fulcio_url);
         let cert_response = fulcio
-            .create_signing_certificate(
-                self.identity_token.raw(),
-                &public_key_pem,
-                &proof_of_possession,
-            )
+            .create_signing_certificate(&self.identity_token, key_pair)
             .await
             .map_err(|e| Error::Signing(format!("Failed to get certificate from Fulcio: {}", e)))?;
 
@@ -219,7 +203,7 @@ impl Signer {
     async fn create_rekor_entry(
         &self,
         artifact: &[u8],
-        signature: &Signature,
+        signature: &SignatureBytes,
         certificate: &DerCertificate,
     ) -> Result<TlogEntryBuilder> {
         // Compute artifact hash
@@ -245,7 +229,7 @@ impl Signer {
     async fn request_timestamp(
         &self,
         tsa_url: &str,
-        signature: &Signature,
+        signature: &SignatureBytes,
     ) -> Result<TimestampToken> {
         let tsa = TimestampClient::new(tsa_url.to_string());
         tsa.timestamp_signature(signature)

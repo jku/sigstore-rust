@@ -5,6 +5,7 @@
 
 use crate::error::{Error, Result};
 use crate::SigningScheme;
+use sigstore_types::DerPublicKey;
 use x509_cert::der::{Decode, Encode};
 use x509_cert::Certificate;
 
@@ -28,8 +29,8 @@ pub struct CertificateInfo {
     pub not_before: i64,
     /// Not valid after (Unix timestamp)
     pub not_after: i64,
-    /// Public key bytes (raw bytes from SubjectPublicKeyInfo)
-    pub public_key_bytes: Vec<u8>,
+    /// Public key in DER-encoded SPKI format
+    pub public_key: DerPublicKey,
     /// Signing scheme derived from the public key algorithm
     pub signing_scheme: SigningScheme,
 }
@@ -57,9 +58,10 @@ pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
     // This is required by aws-lc-rs UnparsedPublicKey, which expects the full SPKI,
     // not just the raw key bytes
     let public_key_info = &cert.tbs_certificate.subject_public_key_info;
-    let public_key_bytes = public_key_info
+    let public_key_der = public_key_info
         .to_der()
         .map_err(|e| Error::InvalidCertificate(format!("failed to encode SPKI: {}", e)))?;
+    let public_key = DerPublicKey::new(public_key_der);
 
     // Determine signing scheme from algorithm OID and parameters
     let signing_scheme = determine_signing_scheme(public_key_info)?;
@@ -75,7 +77,7 @@ pub fn parse_certificate_info(cert_der: &[u8]) -> Result<CertificateInfo> {
         issuer,
         not_before,
         not_after,
-        public_key_bytes,
+        public_key,
         signing_scheme,
     })
 }
@@ -189,62 +191,3 @@ pub fn extract_fulcio_issuer(cert: &Certificate) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Convert PEM-encoded certificate to DER
-///
-/// Uses the `pem` crate for robust parsing that handles all valid PEM formats.
-pub fn der_from_pem(pem_str: &str) -> Result<Vec<u8>> {
-    let parsed = pem::parse(pem_str)
-        .map_err(|e| Error::InvalidCertificate(format!("failed to parse PEM: {}", e)))?;
-
-    if parsed.tag() != "CERTIFICATE" {
-        return Err(Error::InvalidCertificate(format!(
-            "expected CERTIFICATE PEM block, got {}",
-            parsed.tag()
-        )));
-    }
-
-    Ok(parsed.contents().to_vec())
-}
-
-/// Convert any PEM-encoded data to DER (doesn't check the tag)
-pub fn der_from_pem_any(pem_str: &str) -> Result<Vec<u8>> {
-    let parsed =
-        pem::parse(pem_str).map_err(|e| Error::Pem(format!("failed to parse PEM: {}", e)))?;
-
-    Ok(parsed.contents().to_vec())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_der_from_pem() {
-        let pem = "-----BEGIN CERTIFICATE-----\nYWJjZA==\n-----END CERTIFICATE-----";
-        let result = der_from_pem(pem);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), b"abcd");
-    }
-
-    #[test]
-    fn test_der_from_pem_wrong_type() {
-        let pem = "-----BEGIN PRIVATE KEY-----\nYWJjZA==\n-----END PRIVATE KEY-----";
-        let result = der_from_pem(pem);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_der_from_pem_invalid() {
-        let pem = "not a pem";
-        let result = der_from_pem(pem);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_der_from_pem_any() {
-        let pem = "-----BEGIN PUBLIC KEY-----\nYWJjZA==\n-----END PUBLIC KEY-----";
-        let result = der_from_pem_any(pem);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), b"abcd");
-    }
-}

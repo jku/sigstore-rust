@@ -1,6 +1,5 @@
 //! Bundle builder for creating Sigstore bundles
 
-use sigstore_crypto::Signature;
 use sigstore_rekor::entry::LogEntry;
 use sigstore_types::{
     bundle::{
@@ -68,7 +67,7 @@ impl BundleV03 {
     /// This is the most common case for Sigstore signing with Fulcio certificates.
     pub fn with_certificate_and_signature(
         certificate: DerCertificate,
-        signature: Signature,
+        signature: SignatureBytes,
         artifact_digest: Sha256Hash,
     ) -> Self {
         Self::new(
@@ -78,7 +77,7 @@ impl BundleV03 {
                     algorithm: sigstore_types::HashAlgorithm::Sha2256,
                     digest: artifact_digest,
                 }),
-                signature: SignatureBytes::new(signature.into_bytes()),
+                signature,
             }),
         )
     }

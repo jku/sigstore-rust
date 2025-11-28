@@ -2,7 +2,8 @@
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
-use sigstore_crypto::{PublicKeyPem, Signature};
+use sigstore_crypto::KeyPair;
+use sigstore_oidc::IdentityToken;
 use sigstore_types::{DerCertificate, SignatureBytes};
 
 /// A client for interacting with Fulcio
@@ -57,28 +58,42 @@ impl FulcioClient {
 
     /// Request a signing certificate
     ///
+    /// This method handles the complete certificate request flow:
+    /// 1. Extracts the public key from the key pair
+    /// 2. Creates a proof of possession by signing the identity
+    /// 3. Sends the request to Fulcio
+    ///
     /// # Arguments
     /// * `identity_token` - The OIDC identity token
-    /// * `public_key` - The public key in PEM format
-    /// * `proof_of_possession` - Signature proving possession of the private key
+    /// * `key_pair` - The key pair (public key will be extracted, private key used for proof)
     pub async fn create_signing_certificate(
         &self,
-        identity_token: &str,
-        public_key: &PublicKeyPem,
-        proof_of_possession: &Signature,
+        identity_token: &IdentityToken,
+        key_pair: &KeyPair,
     ) -> Result<SigningCertificate> {
         let url = format!("{}/api/v2/signingCert", self.url);
 
+        // Extract public key and convert to PEM for the API
+        let public_key_pem = key_pair
+            .public_key_der()
+            .map_err(|e| Error::Api(format!("failed to export public key: {}", e)))?
+            .to_pem();
+
+        // Create proof of possession by signing the identity (email or subject)
+        let proof_of_possession = key_pair
+            .sign(identity_token.identity().as_bytes())
+            .map_err(|e| Error::Api(format!("failed to create proof of possession: {}", e)))?;
+
         let request = CreateSigningCertificateRequest {
             credentials: Credentials {
-                oidc_identity_token: identity_token.to_string(),
+                oidc_identity_token: identity_token.raw().to_string(),
             },
             public_key_request: PublicKeyRequest {
                 public_key: PublicKeyData {
                     algorithm: String::new(), // Not needed for PEM (contains algorithm info)
-                    content: public_key.as_str().to_string(),
+                    content: public_key_pem,
                 },
-                proof_of_possession: proof_of_possession.clone().into(),
+                proof_of_possession: proof_of_possession.into(),
             },
         };
 
@@ -233,43 +248,42 @@ pub struct TrustBundle {
 }
 
 impl SigningCertificate {
+    /// Get the raw PEM certificates from whichever variant is present
+    fn pem_certificates(&self) -> Option<&Vec<String>> {
+        self.signed_certificate_embedded_sct
+            .as_ref()
+            .map(|c| &c.chain.certificates)
+            .or_else(|| {
+                self.signed_certificate_detached_sct
+                    .as_ref()
+                    .map(|c| &c.chain.certificates)
+            })
+    }
+
     /// Get the leaf certificate as a type-safe DerCertificate
     ///
     /// This parses the PEM-encoded certificate and returns it as a DerCertificate,
     /// which is more suitable for use with other sigstore APIs.
     pub fn leaf_certificate(&self) -> Result<DerCertificate> {
-        let pem = if let Some(embedded) = &self.signed_certificate_embedded_sct {
-            embedded.chain.certificates.first().map(|s| s.as_str())
-        } else if let Some(detached) = &self.signed_certificate_detached_sct {
-            detached.chain.certificates.first().map(|s| s.as_str())
-        } else {
-            None
-        };
+        let pem = self
+            .pem_certificates()
+            .and_then(|certs| certs.first())
+            .ok_or_else(|| Error::Api("No certificate in response".to_string()))?;
 
-        DerCertificate::from_pem(
-            pem.ok_or_else(|| Error::Api("No certificate in response".to_string()))?,
-        )
-        .map_err(|e| Error::Api(format!("Invalid certificate PEM: {}", e)))
+        DerCertificate::from_pem(pem)
+            .map_err(|e| Error::Api(format!("Invalid certificate PEM: {e}")))
     }
 
     /// Get all certificates in the chain as type-safe DerCertificates
     ///
     /// This parses all PEM-encoded certificates and returns them as DerCertificates.
     pub fn certificate_chain(&self) -> Result<Vec<DerCertificate>> {
-        let chain = if let Some(embedded) = &self.signed_certificate_embedded_sct {
-            Some(&embedded.chain.certificates)
-        } else if let Some(detached) = &self.signed_certificate_detached_sct {
-            Some(&detached.chain.certificates)
-        } else {
-            None
-        };
-
-        chain
+        self.pem_certificates()
             .ok_or_else(|| Error::Api("No certificate chain in response".to_string()))?
             .iter()
             .map(|pem| {
                 DerCertificate::from_pem(pem)
-                    .map_err(|e| Error::Api(format!("Invalid certificate PEM: {}", e)))
+                    .map_err(|e| Error::Api(format!("Invalid certificate PEM: {e}")))
             })
             .collect()
     }

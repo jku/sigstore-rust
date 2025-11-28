@@ -1626,6 +1626,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigstore-crypto",
+ "sigstore-oidc",
  "sigstore-types",
  "thiserror",
  "tokio",

@@ -1,7 +1,6 @@
 //! Rekor log entry types
 
 use serde::{Deserialize, Serialize};
-use sigstore_crypto::Signature;
 use sigstore_types::{
     CanonicalizedBody, CheckpointData, DerCertificate, EntryUuid, HashAlgorithm, HexLogId,
     InclusionPromise, KindVersion, LogId, PemContent, Sha256Hash, SignatureBytes, SignedTimestamp,
@@ -253,7 +252,7 @@ impl HashedRekord {
     /// * `certificate` - DER-encoded X.509 certificate from Fulcio
     pub fn new(
         artifact_hash: &Sha256Hash,
-        signature: &Signature,
+        signature: &SignatureBytes,
         certificate: &DerCertificate,
     ) -> Self {
         // Convert DER to PEM for Rekor V1 API
@@ -270,7 +269,7 @@ impl HashedRekord {
                     },
                 },
                 signature: HashedRekordSignature {
-                    content: signature.clone().into(),
+                    content: signature.clone(),
                     public_key: HashedRekordPublicKey {
                         content: PemContent::new(cert_pem.into_bytes()),
                     },
@@ -336,14 +335,14 @@ impl HashedRekordV2 {
     /// * `certificate` - DER-encoded X.509 certificate from Fulcio
     pub fn new(
         artifact_hash: &Sha256Hash,
-        signature: &Signature,
+        signature: &SignatureBytes,
         certificate: &DerCertificate,
     ) -> Self {
         Self {
             request: HashedRekordRequestV002 {
-                digest: artifact_hash.clone(),
+                digest: *artifact_hash,
                 signature: HashedRekordSignatureV2 {
-                    content: signature.clone().into(),
+                    content: signature.clone(),
                     verifier: HashedRekordVerifierV2 {
                         // Assuming ECDSA P-256 SHA-256 for now as per conformance tests
                         key_details: "PKIX_ECDSA_P256_SHA_256".to_string(),
@@ -411,7 +410,7 @@ mod tests {
     fn test_hashed_rekord_creation() {
         let entry = HashedRekord::new(
             &Sha256Hash::from_bytes([0u8; 32]),
-            &Signature::from_bytes(b"signature"),
+            &SignatureBytes::from_bytes(b"signature"),
             &DerCertificate::new(vec![0x30, 0x00]), // Minimal DER sequence
         );
         assert_eq!(entry.kind, "hashedrekord");
@@ -432,7 +431,7 @@ mod tests {
     fn test_hashed_rekord_serializes_lowercase_algorithm() {
         let entry = HashedRekord::new(
             &Sha256Hash::from_bytes([0u8; 32]),
-            &Signature::from_bytes(b"signature"),
+            &SignatureBytes::from_bytes(b"signature"),
             &DerCertificate::new(vec![0x30, 0x00]), // Minimal DER sequence
         );
         let json = serde_json::to_string(&entry).unwrap();

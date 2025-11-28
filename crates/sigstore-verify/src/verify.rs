@@ -307,7 +307,7 @@ impl Verifier {
                 let sig_bytes = sig.sig.as_bytes();
 
                 if sigstore_crypto::verify_signature(
-                    &cert_info.public_key_bytes,
+                    cert_info.public_key.as_bytes(),
                     &pae,
                     sig_bytes,
                     cert_info.signing_scheme,

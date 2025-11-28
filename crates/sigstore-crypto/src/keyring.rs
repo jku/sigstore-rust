@@ -5,13 +5,17 @@
 
 use crate::error::{Error, Result};
 use crate::verification::VerificationKey;
+use sigstore_types::{Sha256Hash, SignatureBytes};
 use std::collections::HashMap;
 
 /// A keyring containing multiple verification keys
+///
+/// Keys are indexed by their key ID, which is typically the SHA-256 hash
+/// of the public key bytes.
 #[derive(Default)]
 pub struct Keyring {
-    /// Keys indexed by key ID
-    keys: HashMap<Vec<u8>, VerificationKey>,
+    /// Keys indexed by key ID (SHA-256 hash of the public key)
+    keys: HashMap<Sha256Hash, VerificationKey>,
 }
 
 impl Keyring {
@@ -23,28 +27,42 @@ impl Keyring {
     }
 
     /// Add a key to the keyring
-    pub fn add_key(&mut self, key_id: Vec<u8>, key: VerificationKey) {
+    ///
+    /// The key ID should be the SHA-256 hash of the public key bytes.
+    pub fn add_key(&mut self, key_id: Sha256Hash, key: VerificationKey) {
         self.keys.insert(key_id, key);
     }
 
     /// Get a key by ID
-    pub fn get_key(&self, key_id: &[u8]) -> Option<&VerificationKey> {
+    pub fn get_key(&self, key_id: &Sha256Hash) -> Option<&VerificationKey> {
         self.keys.get(key_id)
     }
 
     /// Verify a signature using a specific key ID
-    pub fn verify_with_key_id(&self, key_id: &[u8], data: &[u8], signature: &[u8]) -> Result<()> {
+    pub fn verify_with_key_id(
+        &self,
+        key_id: &Sha256Hash,
+        data: impl AsRef<[u8]>,
+        signature: &SignatureBytes,
+    ) -> Result<()> {
         let key = self
             .get_key(key_id)
-            .ok_or_else(|| Error::Verification(format!("key not found: {:?}", key_id)))?;
+            .ok_or_else(|| Error::Verification(format!("key not found: {}", key_id.to_hex())))?;
         key.verify(data, signature)
     }
 
     /// Try to verify a signature with any key in the keyring
-    pub fn verify_any(&self, data: &[u8], signature: &[u8]) -> Result<Vec<u8>> {
+    ///
+    /// Returns the key ID that successfully verified the signature.
+    pub fn verify_any(
+        &self,
+        data: impl AsRef<[u8]>,
+        signature: &SignatureBytes,
+    ) -> Result<Sha256Hash> {
+        let data = data.as_ref();
         for (key_id, key) in &self.keys {
             if key.verify(data, signature).is_ok() {
-                return Ok(key_id.clone());
+                return Ok(*key_id);
             }
         }
         Err(Error::Verification(
@@ -67,16 +85,17 @@ impl Keyring {
 mod tests {
     use super::*;
     use crate::hash::sha256;
-    use crate::signing::{KeyPair, SigningScheme};
+    use crate::signing::KeyPair;
 
     #[test]
     fn test_keyring_add_and_get() {
         let mut keyring = Keyring::new();
-        let kp = KeyPair::generate_ed25519().unwrap();
-        let key_id = sha256(kp.public_key_bytes()).as_bytes().to_vec();
-        let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
+        let kp = KeyPair::generate_ecdsa_p256().unwrap();
+        let spki = kp.public_key_der().unwrap();
+        let key_id = sha256(spki.as_bytes());
+        let vk = VerificationKey::from_spki(&spki, kp.default_scheme()).unwrap();
 
-        keyring.add_key(key_id.clone(), vk);
+        keyring.add_key(key_id, vk);
         assert_eq!(keyring.len(), 1);
         assert!(keyring.get_key(&key_id).is_some());
     }
@@ -84,18 +103,17 @@ mod tests {
     #[test]
     fn test_keyring_verify() {
         let mut keyring = Keyring::new();
-        let kp = KeyPair::generate_ed25519().unwrap();
-        let key_id = sha256(kp.public_key_bytes()).as_bytes().to_vec();
-        let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
+        let kp = KeyPair::generate_ecdsa_p256().unwrap();
+        let spki = kp.public_key_der().unwrap();
+        let key_id = sha256(spki.as_bytes());
+        let vk = VerificationKey::from_spki(&spki, kp.default_scheme()).unwrap();
 
-        keyring.add_key(key_id.clone(), vk);
+        keyring.add_key(key_id, vk);
 
         let data = b"test data";
         let sig = kp.sign(data).unwrap();
 
-        assert!(keyring
-            .verify_with_key_id(&key_id, data, sig.as_bytes())
-            .is_ok());
+        assert!(keyring.verify_with_key_id(&key_id, data, &sig).is_ok());
     }
 
     #[test]
@@ -104,22 +122,24 @@ mod tests {
 
         // Add multiple keys
         for _ in 0..3 {
-            let kp = KeyPair::generate_ed25519().unwrap();
-            let key_id = sha256(kp.public_key_bytes()).as_bytes().to_vec();
-            let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
+            let kp = KeyPair::generate_ecdsa_p256().unwrap();
+            let spki = kp.public_key_der().unwrap();
+            let key_id = sha256(spki.as_bytes());
+            let vk = VerificationKey::from_spki(&spki, kp.default_scheme()).unwrap();
             keyring.add_key(key_id, vk);
         }
 
         // Sign with a new key and add it
-        let kp = KeyPair::generate_ed25519().unwrap();
-        let key_id = sha256(kp.public_key_bytes()).as_bytes().to_vec();
-        let vk = VerificationKey::new(kp.public_key_bytes().to_vec(), SigningScheme::Ed25519);
-        keyring.add_key(key_id.clone(), vk);
+        let kp = KeyPair::generate_ecdsa_p256().unwrap();
+        let spki = kp.public_key_der().unwrap();
+        let key_id = sha256(spki.as_bytes());
+        let vk = VerificationKey::from_spki(&spki, kp.default_scheme()).unwrap();
+        keyring.add_key(key_id, vk);
 
         let data = b"test data";
         let sig = kp.sign(data).unwrap();
 
-        let result = keyring.verify_any(data, sig.as_bytes());
+        let result = keyring.verify_any(data, &sig);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), key_id);
     }

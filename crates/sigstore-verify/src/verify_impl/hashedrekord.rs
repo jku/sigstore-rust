@@ -4,10 +4,9 @@
 //! artifact hash verification and certificate/signature matching.
 
 use crate::error::{Error, Result};
-use sigstore_crypto::x509;
 use sigstore_rekor::body::RekorEntryBody;
 use sigstore_types::bundle::VerificationMaterialContent;
-use sigstore_types::{Bundle, Sha256Hash, SignatureContent, TransparencyLogEntry};
+use sigstore_types::{Bundle, DerCertificate, Sha256Hash, SignatureContent, TransparencyLogEntry};
 use x509_cert::der::Decode;
 use x509_cert::Certificate;
 
@@ -152,10 +151,11 @@ fn validate_certificate_match(
                 Error::Verification(format!("public key PEM not valid UTF-8: {}", e))
             })?;
 
-            // Extract DER from PEM
-            Some(x509::der_from_pem(&pem_str).map_err(|e| {
-                Error::Verification(format!("failed to extract DER from PEM: {}", e))
-            })?)
+            // Parse PEM to get DER certificate
+            let cert = DerCertificate::from_pem(&pem_str).map_err(|e| {
+                Error::Verification(format!("failed to parse certificate PEM: {}", e))
+            })?;
+            Some(cert.as_bytes().to_vec())
         }
         RekorEntryBody::HashedRekordV002(rekord) => {
             // v0.0.2: spec.hashedRekordV002.signature.verifier.x509Certificate.rawBytes (DerCertificate)
@@ -318,7 +318,7 @@ fn verify_signature_cryptographically(
                     );
 
                     sigstore_crypto::verification::verify_signature_prehashed(
-                        &cert_info.public_key_bytes,
+                        cert_info.public_key.as_bytes(),
                         &hash_bytes,
                         &signature_bytes,
                         cert_info.signing_scheme,
@@ -341,7 +341,7 @@ fn verify_signature_cryptographically(
             } else {
                 // We have the artifact - verify signature over it
                 sigstore_crypto::verification::verify_signature(
-                    &cert_info.public_key_bytes,
+                    cert_info.public_key.as_bytes(),
                     artifact,
                     &signature_bytes,
                     cert_info.signing_scheme,
