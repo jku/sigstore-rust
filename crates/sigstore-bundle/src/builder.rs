@@ -4,119 +4,122 @@ use sigstore_crypto::Signature;
 use sigstore_rekor::entry::LogEntry;
 use sigstore_types::{
     bundle::{
-        CheckpointData, InclusionPromise, InclusionProof, KindVersion, LogId, MessageSignature,
-        Rfc3161Timestamp, SignatureContent, TimestampVerificationData, TransparencyLogEntry,
-        VerificationMaterial, VerificationMaterialContent,
+        CertificateContent, CheckpointData, InclusionPromise, InclusionProof, KindVersion, LogId,
+        MessageSignature, Rfc3161Timestamp, SignatureContent, TimestampVerificationData,
+        TransparencyLogEntry, VerificationMaterial, VerificationMaterialContent,
     },
     Bundle, CanonicalizedBody, DerCertificate, DsseEnvelope, LogKeyId, MediaType, Sha256Hash,
     SignatureBytes, SignedTimestamp, TimestampToken,
 };
 
-/// Builder for creating Sigstore bundles
-pub struct BundleBuilder {
-    /// Bundle version
-    version: MediaType,
-    /// Verification material content
-    verification_content: Option<VerificationMaterialContent>,
-    /// Transparency log entries
-    tlog_entries: Vec<TransparencyLogEntry>,
-    /// RFC 3161 timestamps
-    rfc3161_timestamps: Vec<Rfc3161Timestamp>,
-    /// Signature content
-    signature_content: Option<SignatureContent>,
+/// Verification material for v0.3 bundles.
+///
+/// In v0.3 bundles, only a single certificate or a public key hint is allowed.
+/// Certificate chains are NOT permitted in v0.3 format.
+#[derive(Debug, Clone)]
+pub enum VerificationMaterialV03 {
+    /// Single certificate (the common case for Fulcio-issued certs)
+    Certificate(DerCertificate),
+    /// Public key hint (for pre-existing keys)
+    PublicKey { hint: String },
 }
 
-impl BundleBuilder {
-    /// Create a new bundle builder with default version (0.3)
-    pub fn new() -> Self {
+/// A Sigstore bundle in v0.3 format.
+///
+/// The v0.3 format requires:
+/// - A single certificate (not a chain) or public key hint
+/// - Either a message signature or DSSE envelope
+/// - Optional transparency log entries and RFC 3161 timestamps
+///
+/// # Example
+///
+/// ```ignore
+/// use sigstore_bundle::BundleV03;
+///
+/// let bundle = BundleV03::with_certificate_and_signature(cert_der, signature, artifact_hash)
+///     .with_tlog_entry(tlog_entry)
+///     .into_bundle();
+/// ```
+#[derive(Debug, Clone)]
+pub struct BundleV03 {
+    /// Verification material - either a certificate or public key
+    pub verification: VerificationMaterialV03,
+    /// The signature content (message signature or DSSE envelope)
+    pub content: SignatureContent,
+    /// Transparency log entries
+    pub tlog_entries: Vec<TransparencyLogEntry>,
+    /// RFC 3161 timestamps
+    pub rfc3161_timestamps: Vec<Rfc3161Timestamp>,
+}
+
+impl BundleV03 {
+    /// Create a new v0.3 bundle with the required fields.
+    pub fn new(verification: VerificationMaterialV03, content: SignatureContent) -> Self {
         Self {
-            version: MediaType::Bundle0_3,
-            verification_content: None,
+            verification,
+            content,
             tlog_entries: Vec::new(),
             rfc3161_timestamps: Vec::new(),
-            signature_content: None,
         }
     }
 
-    /// Set the bundle version
-    pub fn version(mut self, version: MediaType) -> Self {
-        self.version = version;
-        self
+    /// Create a new v0.3 bundle with a certificate and message signature.
+    ///
+    /// This is the most common case for Sigstore signing with Fulcio certificates.
+    pub fn with_certificate_and_signature(
+        cert_der: Vec<u8>,
+        signature: Signature,
+        artifact_digest: Sha256Hash,
+    ) -> Self {
+        Self::new(
+            VerificationMaterialV03::Certificate(DerCertificate::new(cert_der)),
+            SignatureContent::MessageSignature(MessageSignature {
+                message_digest: Some(sigstore_types::bundle::MessageDigest {
+                    algorithm: sigstore_types::HashAlgorithm::Sha2256,
+                    digest: artifact_digest,
+                }),
+                signature: SignatureBytes::new(signature.into_bytes()),
+            }),
+        )
     }
 
-    /// Set the signing certificate from DER bytes
-    pub fn certificate(mut self, cert_der: Vec<u8>) -> Self {
-        self.verification_content = Some(VerificationMaterialContent::Certificate(
-            sigstore_types::bundle::CertificateContent {
-                raw_bytes: DerCertificate::new(cert_der),
-            },
-        ));
-        self
+    /// Create a new v0.3 bundle with a certificate and DSSE envelope.
+    ///
+    /// Used for attestations (in-toto statements).
+    pub fn with_certificate_and_dsse(cert_der: Vec<u8>, envelope: DsseEnvelope) -> Self {
+        Self::new(
+            VerificationMaterialV03::Certificate(DerCertificate::new(cert_der)),
+            SignatureContent::DsseEnvelope(envelope),
+        )
     }
 
-    /// Set the certificate chain from DER bytes
-    pub fn certificate_chain(mut self, certs_der: Vec<Vec<u8>>) -> Self {
-        self.verification_content = Some(VerificationMaterialContent::X509CertificateChain {
-            certificates: certs_der
-                .into_iter()
-                .map(|c| sigstore_types::bundle::X509Certificate {
-                    raw_bytes: DerCertificate::new(c),
-                })
-                .collect(),
-        });
-        self
-    }
-
-    /// Set the public key hint
-    pub fn public_key(mut self, hint: String) -> Self {
-        self.verification_content = Some(VerificationMaterialContent::PublicKey { hint });
-        self
-    }
-
-    /// Add a transparency log entry
-    pub fn add_tlog_entry(mut self, entry: TransparencyLogEntry) -> Self {
+    /// Add a transparency log entry.
+    pub fn with_tlog_entry(mut self, entry: TransparencyLogEntry) -> Self {
         self.tlog_entries.push(entry);
         self
     }
 
-    /// Add an RFC 3161 timestamp from DER bytes
-    pub fn add_rfc3161_timestamp(mut self, signed_timestamp: Vec<u8>) -> Self {
+    /// Add an RFC 3161 timestamp.
+    pub fn with_rfc3161_timestamp(mut self, signed_timestamp: Vec<u8>) -> Self {
         self.rfc3161_timestamps.push(Rfc3161Timestamp {
             signed_timestamp: TimestampToken::new(signed_timestamp),
         });
         self
     }
 
-    /// Set the message signature with artifact digest
-    ///
-    /// The digest is required for compatibility with cosign and other Sigstore tools.
-    pub fn message_signature(mut self, signature: Signature, artifact_digest: Sha256Hash) -> Self {
-        self.signature_content = Some(SignatureContent::MessageSignature(MessageSignature {
-            message_digest: Some(sigstore_types::bundle::MessageDigest {
-                algorithm: sigstore_types::HashAlgorithm::Sha2256,
-                digest: artifact_digest,
-            }),
-            signature: SignatureBytes::new(signature.into_bytes()),
-        }));
-        self
-    }
+    /// Convert to a serializable Bundle.
+    pub fn into_bundle(self) -> Bundle {
+        let verification_content = match self.verification {
+            VerificationMaterialV03::Certificate(cert) => {
+                VerificationMaterialContent::Certificate(CertificateContent { raw_bytes: cert })
+            }
+            VerificationMaterialV03::PublicKey { hint } => {
+                VerificationMaterialContent::PublicKey { hint }
+            }
+        };
 
-    /// Set the DSSE envelope
-    pub fn dsse_envelope(mut self, envelope: DsseEnvelope) -> Self {
-        self.signature_content = Some(SignatureContent::DsseEnvelope(envelope));
-        self
-    }
-
-    /// Build the bundle
-    pub fn build(self) -> Result<Bundle, &'static str> {
-        let verification_content = self
-            .verification_content
-            .ok_or("verification material not set")?;
-
-        let signature_content = self.signature_content.ok_or("signature content not set")?;
-
-        Ok(Bundle {
-            media_type: self.version.as_str().to_string(),
+        Bundle {
+            media_type: MediaType::Bundle0_3.as_str().to_string(),
             verification_material: VerificationMaterial {
                 content: verification_content,
                 tlog_entries: self.tlog_entries,
@@ -124,18 +127,12 @@ impl BundleBuilder {
                     rfc3161_timestamps: self.rfc3161_timestamps,
                 },
             },
-            content: signature_content,
-        })
+            content: self.content,
+        }
     }
 }
 
-impl Default for BundleBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Helper to create a transparency log entry
+/// Helper to create a transparency log entry.
 pub struct TlogEntryBuilder {
     log_index: u64,
     log_id: String,
@@ -148,7 +145,7 @@ pub struct TlogEntryBuilder {
 }
 
 impl TlogEntryBuilder {
-    /// Create a new tlog entry builder
+    /// Create a new tlog entry builder.
     pub fn new() -> Self {
         Self {
             log_index: 0,
@@ -162,7 +159,7 @@ impl TlogEntryBuilder {
         }
     }
 
-    /// Create a tlog entry builder from a Rekor LogEntry response
+    /// Create a tlog entry builder from a Rekor LogEntry response.
     ///
     /// This method extracts all relevant fields from a Rekor API response
     /// and populates the builder automatically.
@@ -225,19 +222,19 @@ impl TlogEntryBuilder {
         builder
     }
 
-    /// Set the log index
+    /// Set the log index.
     pub fn log_index(mut self, index: u64) -> Self {
         self.log_index = index;
         self
     }
 
-    /// Set the integrated time (Unix timestamp)
+    /// Set the integrated time (Unix timestamp).
     pub fn integrated_time(mut self, time: u64) -> Self {
         self.integrated_time = time;
         self
     }
 
-    /// Set the inclusion promise (Signed Entry Timestamp)
+    /// Set the inclusion promise (Signed Entry Timestamp).
     pub fn inclusion_promise(mut self, signed_entry_timestamp: SignedTimestamp) -> Self {
         self.inclusion_promise = Some(InclusionPromise {
             signed_entry_timestamp,
@@ -245,7 +242,7 @@ impl TlogEntryBuilder {
         self
     }
 
-    /// Set the inclusion proof
+    /// Set the inclusion proof.
     ///
     /// # Arguments
     /// * `log_index` - The log index
@@ -273,7 +270,7 @@ impl TlogEntryBuilder {
         self
     }
 
-    /// Build the transparency log entry
+    /// Build the transparency log entry.
     pub fn build(self) -> TransparencyLogEntry {
         TransparencyLogEntry {
             log_index: self.log_index.to_string().into(),

@@ -5,21 +5,18 @@
 //!
 //! This binary implements the conformance test protocol for Sigstore clients.
 
-use sigstore_bundle::{BundleBuilder, TlogEntryBuilder};
+use sigstore_bundle::{BundleV03, TlogEntryBuilder};
 use sigstore_crypto::{CertificatePem, KeyPair};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::parse_identity_token;
 use sigstore_rekor::RekorClient;
 use sigstore_trust_root::TrustedRoot;
-use sigstore_types::{Bundle, MediaType, SignatureContent};
+use sigstore_types::{Bundle, SignatureContent};
 use sigstore_verify::{verify, VerificationPolicy};
 
 use std::env;
 use std::fs;
 use std::process;
-
-use x509_cert::der::Decode;
-use x509_cert::Certificate;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -191,49 +188,11 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         .create_signing_certificate(&identity_token, &public_key_pem, &proof_of_possession)
         .await?;
 
+    // Get the leaf certificate (v0.3 bundles use single cert, not chain)
     let leaf_cert_pem = cert_response
         .leaf_certificate()
         .ok_or("No leaf certificate in response")?;
-
-    // Extract full chain
-    let chain_pem = cert_response
-        .certificate_chain()
-        .ok_or("No certificate chain in response")?;
-    let mut chain_der_bytes = Vec::new();
-    for cert_pem in chain_pem {
-        let der_b64 = pem_to_der_base64(cert_pem)?;
-        let der = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &der_b64)?;
-
-        if let Ok(cert) = Certificate::from_der(&der) {
-            // Check BasicConstraints to exclude CA certificates (Root and Intermediates)
-            // The conformance test test_sign_does_not_produce_root asserts that no cert in the bundle is a CA.
-            use x509_cert::der::Decode;
-            use x509_cert::ext::pkix::BasicConstraints;
-
-            let basic_constraints_oid = "2.5.29.19"
-                .parse::<x509_cert::der::asn1::ObjectIdentifier>()
-                .unwrap();
-
-            let mut is_ca = false;
-            if let Some(extensions) = &cert.tbs_certificate.extensions {
-                for ext in extensions.iter() {
-                    if ext.extn_id == basic_constraints_oid {
-                        if let Ok(bc) = BasicConstraints::from_der(ext.extn_value.as_bytes()) {
-                            if bc.ca {
-                                is_ca = true;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if is_ca {
-                continue;
-            }
-        }
-
-        chain_der_bytes.push(der);
-    }
+    let leaf_cert_der = pem_to_der(leaf_cert_pem)?;
 
     // Sign the artifact
     let signature = key_pair.sign(&artifact_data)?;
@@ -269,11 +228,9 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let tlog_entry =
         TlogEntryBuilder::from_log_entry(&log_entry, "hashedrekord", kind_version).build();
 
-    let mut bundle_builder = BundleBuilder::new()
-        .version(MediaType::Bundle0_2)
-        .certificate_chain(chain_der_bytes)
-        .message_signature(signature.clone(), artifact_hash)
-        .add_tlog_entry(tlog_entry);
+    let mut bundle =
+        BundleV03::with_certificate_and_signature(leaf_cert_der, signature.clone(), artifact_hash)
+            .with_tlog_entry(tlog_entry);
 
     if let Some(tsa_url) = tsa_url {
         eprintln!("Using TSA: {}", tsa_url);
@@ -285,12 +242,10 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
         // Timestamp the signature digest
         let timestamp_der = tsa_client.timestamp_sha256(&signature_digest).await?;
 
-        bundle_builder = bundle_builder.add_rfc3161_timestamp(timestamp_der);
+        bundle = bundle.with_rfc3161_timestamp(timestamp_der);
     }
 
-    let bundle = bundle_builder
-        .build()
-        .map_err(|e| format!("Failed to build bundle: {}", e))?;
+    let bundle = bundle.into_bundle();
 
     // Write bundle
     let bundle_json = bundle.to_json_pretty()?;
@@ -474,7 +429,8 @@ fn verify_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn pem_to_der_base64(pem: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn pem_to_der(pem: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use base64::Engine;
     let start_marker = "-----BEGIN CERTIFICATE-----";
     let end_marker = "-----END CERTIFICATE-----";
 
@@ -492,5 +448,5 @@ fn pem_to_der_base64(pem: &str) -> Result<String, Box<dyn std::error::Error>> {
     let content = &pem[start + start_marker.len()..end];
     let clean_content: String = content.chars().filter(|c| !c.is_whitespace()).collect();
 
-    Ok(clean_content)
+    Ok(base64::engine::general_purpose::STANDARD.decode(&clean_content)?)
 }

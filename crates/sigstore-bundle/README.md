@@ -9,7 +9,7 @@ This crate handles Sigstore bundle creation, parsing, and validation. A Sigstore
 ## Features
 
 - **Bundle parsing**: Load bundles from JSON (v0.1, v0.2, v0.3 formats)
-- **Bundle creation**: Build bundles programmatically with `BundleBuilder`
+- **Bundle creation**: Build v0.3 bundles with type-safe `BundleV03`
 - **Validation**: Structural validation of bundle contents
 - **Version handling**: Support for multiple bundle format versions
 - **Media type detection**: Automatic format detection from media type
@@ -25,7 +25,7 @@ This crate handles Sigstore bundle creation, parsing, and validation. A Sigstore
 ## Usage
 
 ```rust
-use sigstore_bundle::{BundleBuilder, ValidationOptions};
+use sigstore_bundle::{BundleV03, ValidationOptions};
 use sigstore_types::Bundle;
 
 // Parse a bundle
@@ -35,12 +35,10 @@ let bundle: Bundle = serde_json::from_str(bundle_json)?;
 let options = ValidationOptions::default();
 sigstore_bundle::validate(&bundle, &options)?;
 
-// Build a bundle
-let bundle = BundleBuilder::new()
-    .certificate_chain(certs)
-    .signature(signature)
-    .tlog_entry(entry)
-    .build()?;
+// Build a v0.3 bundle (type-safe: certificate chains not allowed)
+let bundle = BundleV03::with_certificate_and_signature(cert_der, signature, artifact_hash)
+    .with_tlog_entry(entry)
+    .into_bundle();
 ```
 
 ## Related Crates

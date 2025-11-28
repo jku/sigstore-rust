@@ -7,6 +7,6 @@ pub mod builder;
 pub mod error;
 pub mod validation;
 
-pub use builder::{BundleBuilder, TlogEntryBuilder};
+pub use builder::{BundleV03, TlogEntryBuilder, VerificationMaterialV03};
 pub use error::{Error, Result};
 pub use validation::{validate_bundle, validate_bundle_with_options, ValidationOptions};

@@ -4,16 +4,13 @@
 
 use crate::error::{Error, Result};
 use base64::Engine as _;
-use sigstore_bundle::{BundleBuilder, TlogEntryBuilder};
+use sigstore_bundle::{BundleV03, TlogEntryBuilder};
 use sigstore_crypto::{CertificatePem, KeyPair, Signature, SigningScheme};
 use sigstore_fulcio::FulcioClient;
 use sigstore_oidc::{parse_identity_token, IdentityToken};
 use sigstore_rekor::{HashedRekord, RekorClient};
 use sigstore_tsa::TimestampClient;
-use sigstore_types::{Bundle, MediaType};
-use x509_cert::der::Decode;
-use x509_cert::ext::pkix::BasicConstraints;
-use x509_cert::Certificate;
+use sigstore_types::Bundle;
 
 /// Configuration for signing operations
 #[derive(Debug, Clone)]
@@ -142,8 +139,8 @@ impl Signer {
         // 1. Generate ephemeral key pair
         let key_pair = self.generate_ephemeral_keypair()?;
 
-        // 2. Get certificate from Fulcio
-        let (chain_der_b64, leaf_cert_pem) = self.request_certificate(&key_pair).await?;
+        // 2. Get signing certificate from Fulcio
+        let (leaf_cert_der, leaf_cert_pem) = self.request_certificate(&key_pair).await?;
 
         // 3. Sign the artifact
         let signature = key_pair.sign(artifact)?;
@@ -154,23 +151,23 @@ impl Signer {
             .await?;
 
         // 5. Get timestamp from TSA (optional)
-        let timestamp_b64 = if let Some(tsa_url) = &self.tsa_url {
+        let timestamp_der = if let Some(tsa_url) = &self.tsa_url {
             Some(self.request_timestamp(tsa_url, &signature).await?)
         } else {
             None
         };
 
-        // 6. Compute artifact hash for bundle (required for cosign compatibility)
+        // 6. Build bundle
         let artifact_hash = sigstore_crypto::sha256(artifact);
+        let mut bundle =
+            BundleV03::with_certificate_and_signature(leaf_cert_der, signature, artifact_hash)
+                .with_tlog_entry(tlog_entry.build());
 
-        // 7. Build and return bundle
-        self.build_bundle(
-            chain_der_b64,
-            signature,
-            tlog_entry,
-            timestamp_b64,
-            artifact_hash,
-        )
+        if let Some(ts_der) = timestamp_der {
+            bundle = bundle.with_rfc3161_timestamp(ts_der);
+        }
+
+        Ok(bundle.into_bundle())
     }
 
     /// Generate an ephemeral key pair based on the configured signing scheme
@@ -187,7 +184,9 @@ impl Signer {
     }
 
     /// Request a signing certificate from Fulcio
-    async fn request_certificate(&self, key_pair: &KeyPair) -> Result<(Vec<String>, String)> {
+    ///
+    /// Returns the leaf certificate as (DER bytes, PEM string).
+    async fn request_certificate(&self, key_pair: &KeyPair) -> Result<(Vec<u8>, String)> {
         // Parse identity token to extract email or subject
         let token_info = parse_identity_token(self.identity_token.raw())?;
         let subject = token_info.email().unwrap_or(token_info.subject());
@@ -200,10 +199,8 @@ impl Signer {
         // Create proof of possession
         let proof_of_possession = key_pair.sign(subject.as_bytes())?;
 
-        // Create Fulcio client
+        // Create Fulcio client and request certificate
         let fulcio = FulcioClient::new(&self.fulcio_url);
-
-        // Request certificate from Fulcio
         let cert_response = fulcio
             .create_signing_certificate(
                 self.identity_token.raw(),
@@ -213,59 +210,15 @@ impl Signer {
             .await
             .map_err(|e| Error::Signing(format!("Failed to get certificate from Fulcio: {}", e)))?;
 
+        // Get the leaf certificate (v0.3 bundles use single cert, not chain)
         let leaf_cert_pem = cert_response
             .leaf_certificate()
-            .ok_or_else(|| Error::Signing("No leaf certificate in response".to_string()))?;
+            .ok_or_else(|| Error::Signing("No leaf certificate in response".to_string()))?
+            .to_string();
 
-        // Extract full chain and filter out CA certificates
-        let chain_pem = cert_response
-            .certificate_chain()
-            .ok_or_else(|| Error::Signing("No certificate chain in response".to_string()))?;
+        let leaf_cert_der = pem_to_der(&leaf_cert_pem)?;
 
-        let chain_der_b64 = self.filter_ca_certificates(chain_pem)?;
-
-        Ok((chain_der_b64, leaf_cert_pem.to_string()))
-    }
-
-    /// Filter out CA certificates from the certificate chain
-    /// The conformance test test_sign_does_not_produce_root asserts that no cert in the bundle is a CA.
-    fn filter_ca_certificates(&self, chain_pem: &[String]) -> Result<Vec<String>> {
-        let mut chain_der_b64 = Vec::new();
-
-        for cert_pem in chain_pem {
-            let der_b64 = pem_to_der_base64(cert_pem)?;
-            let der = base64::engine::general_purpose::STANDARD
-                .decode(&der_b64)
-                .map_err(|e| Error::Signing(format!("Failed to decode certificate: {}", e)))?;
-
-            if let Ok(cert) = Certificate::from_der(&der) {
-                // Check BasicConstraints to exclude CA certificates (Root and Intermediates)
-                let basic_constraints_oid = "2.5.29.19"
-                    .parse::<x509_cert::der::asn1::ObjectIdentifier>()
-                    .map_err(|e| Error::Signing(format!("Invalid OID: {}", e)))?;
-
-                let mut is_ca = false;
-                if let Some(extensions) = &cert.tbs_certificate.extensions {
-                    for ext in extensions.iter() {
-                        if ext.extn_id == basic_constraints_oid {
-                            if let Ok(bc) = BasicConstraints::from_der(ext.extn_value.as_bytes()) {
-                                if bc.ca {
-                                    is_ca = true;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if is_ca {
-                    continue;
-                }
-            }
-
-            chain_der_b64.push(der_b64);
-        }
-
-        Ok(chain_der_b64)
+        Ok((leaf_cert_der, leaf_cert_pem))
     }
 
     /// Create a Rekor entry for the signed artifact
@@ -300,59 +253,12 @@ impl Signer {
     }
 
     /// Request a timestamp from the Timestamp Authority
-    async fn request_timestamp(&self, tsa_url: &str, signature: &Signature) -> Result<String> {
-        // Hash the signature
+    async fn request_timestamp(&self, tsa_url: &str, signature: &Signature) -> Result<Vec<u8>> {
         let signature_digest = sigstore_crypto::sha256(signature.as_bytes());
-
-        // Create TSA client and request timestamp
         let tsa = TimestampClient::new(tsa_url.to_string());
-        let timestamp_der = tsa
-            .timestamp_sha256(&signature_digest)
+        tsa.timestamp_sha256(&signature_digest)
             .await
-            .map_err(|e| Error::Signing(format!("Failed to get timestamp: {}", e)))?;
-
-        // Encode to base64
-        let timestamp_b64 = base64::engine::general_purpose::STANDARD.encode(&timestamp_der);
-        Ok(timestamp_b64)
-    }
-
-    /// Build the final Sigstore bundle
-    fn build_bundle(
-        &self,
-        chain_der_b64: Vec<String>,
-        signature: Signature,
-        tlog_builder: TlogEntryBuilder,
-        timestamp_b64: Option<String>,
-        artifact_hash: sigstore_types::Sha256Hash,
-    ) -> Result<Bundle> {
-        // Decode certificate chain from base64 to DER bytes
-        let chain_der: Vec<Vec<u8>> = chain_der_b64
-            .into_iter()
-            .map(|cert_b64| {
-                base64::engine::general_purpose::STANDARD
-                    .decode(&cert_b64)
-                    .map_err(|e| Error::Signing(format!("Invalid certificate base64: {}", e)))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // Build bundle
-        let mut bundle_builder = BundleBuilder::new()
-            .version(MediaType::Bundle0_2)
-            .certificate_chain(chain_der)
-            .message_signature(signature, artifact_hash)
-            .add_tlog_entry(tlog_builder.build());
-
-        // Add timestamp if present
-        if let Some(ts_b64) = timestamp_b64 {
-            let ts_bytes = base64::engine::general_purpose::STANDARD
-                .decode(&ts_b64)
-                .map_err(|e| Error::Signing(format!("Invalid timestamp base64: {}", e)))?;
-            bundle_builder = bundle_builder.add_rfc3161_timestamp(ts_bytes);
-        }
-
-        bundle_builder
-            .build()
-            .map_err(|e| Error::Signing(format!("Failed to build bundle: {}", e)))
+            .map_err(|e| Error::Signing(format!("Failed to get timestamp: {}", e)))
     }
 }
 
@@ -361,8 +267,8 @@ pub fn sign_context() -> SigningContext {
     SigningContext::production()
 }
 
-/// Convert PEM certificate to base64-encoded DER
-fn pem_to_der_base64(pem: &str) -> Result<String> {
+/// Convert PEM certificate to DER bytes
+fn pem_to_der(pem: &str) -> Result<Vec<u8>> {
     let start_marker = "-----BEGIN CERTIFICATE-----";
     let end_marker = "-----END CERTIFICATE-----";
 
@@ -380,7 +286,9 @@ fn pem_to_der_base64(pem: &str) -> Result<String> {
     let content = &pem[start + start_marker.len()..end];
     let clean_content: String = content.chars().filter(|c| !c.is_whitespace()).collect();
 
-    Ok(clean_content)
+    base64::engine::general_purpose::STANDARD
+        .decode(&clean_content)
+        .map_err(|e| Error::Signing(format!("Invalid certificate base64: {}", e)))
 }
 
 #[cfg(test)]
