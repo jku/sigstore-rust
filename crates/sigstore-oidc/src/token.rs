@@ -102,7 +102,7 @@ impl IdentityToken {
     /// GitLab CI, Buildkite, etc. using the `ambient-id` crate.
     pub async fn detect_ambient() -> Result<Option<Self>> {
         match Detector::new().detect("sigstore").await {
-            Ok(Some(token)) => Self::from_jwt(&token.reveal()).map(Some),
+            Ok(Some(token)) => Self::from_jwt(token.reveal()).map(Some),
             Ok(None) => Ok(None),
             Err(e) => Err(Error::Token(format!(
                 "failed to detect ambient credentials: {}",
