@@ -48,7 +48,7 @@ fn main() {
 
 fn print_usage(program: &str) {
     eprintln!("Usage:");
-    eprintln!("  {} sign-bundle --identity-token TOKEN --bundle FILE [--staging] [--trusted-root FILE] [--signing-config FILE] ARTIFACT", program);
+    eprintln!("  {} sign-bundle --identity-token TOKEN --bundle FILE [--in-toto] [--staging] [--trusted-root FILE] [--signing-config FILE] ARTIFACT", program);
     eprintln!("  {} verify-bundle --bundle FILE --certificate-identity IDENTITY --certificate-oidc-issuer URL [--staging] [--trusted-root FILE] ARTIFACT_OR_DIGEST", program);
     eprintln!("  {} verify-bundle --bundle FILE --key KEY_FILE [--staging] [--trusted-root FILE] ARTIFACT_OR_DIGEST", program);
 }
@@ -62,6 +62,7 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let mut staging = false;
     let mut _trusted_root: Option<String> = None;
     let mut _signing_config: Option<String> = None;
+    let mut in_toto = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -79,6 +80,9 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
                     return Err("Missing value for --bundle".into());
                 }
                 bundle_path = Some(args[i].clone());
+            }
+            "--in-toto" => {
+                in_toto = true;
             }
             "--staging" => {
                 staging = true;
@@ -128,7 +132,11 @@ async fn sign_bundle(args: &[String]) -> Result<(), Box<dyn std::error::Error>> 
     let artifact_data = fs::read(&artifact_path)?;
 
     // Sign and get bundle
-    let bundle = signer.sign(artifact_data.as_slice()).await?;
+    let bundle = if in_toto {
+        signer.sign_raw_statement(&artifact_data).await?
+    } else {
+        signer.sign(artifact_data.as_slice()).await?
+    };
 
     // Write bundle
     let bundle_json = bundle.to_json_pretty()?;
