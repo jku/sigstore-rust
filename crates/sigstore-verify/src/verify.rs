@@ -13,9 +13,6 @@ use sigstore_trust_root::TrustedRoot;
 
 use sigstore_types::{Artifact, Bundle, HashAlgorithm, SignatureContent, Statement};
 
-/// Default clock skew tolerance in seconds (60 seconds = 1 minute)
-pub const DEFAULT_CLOCK_SKEW_SECONDS: i64 = 60;
-
 /// How the signing certificate is verified.
 ///
 /// SCT verification depends on the issuer identified while verifying the
@@ -56,11 +53,6 @@ pub struct VerificationPolicy {
     pub verify_tlog: bool,
     /// How the signing certificate (and its SCT) is verified
     pub certificate: CertificatePolicy,
-    /// Clock skew tolerance in seconds for time validation
-    ///
-    /// This allows for a tolerance when checking that integrated times
-    /// are not in the future. Default is 60 seconds.
-    pub clock_skew_seconds: i64,
 }
 
 impl Default for VerificationPolicy {
@@ -70,7 +62,6 @@ impl Default for VerificationPolicy {
             issuer: None,
             verify_tlog: true,
             certificate: CertificatePolicy::Verify { verify_sct: true },
-            clock_skew_seconds: DEFAULT_CLOCK_SKEW_SECONDS,
         }
     }
 }
@@ -152,15 +143,6 @@ impl VerificationPolicy {
         }
         self
     }
-
-    /// Set the clock skew tolerance in seconds
-    ///
-    /// This allows for a tolerance when checking that integrated times
-    /// are not in the future. Default is 60 seconds.
-    pub fn with_clock_skew_seconds(mut self, seconds: i64) -> Self {
-        self.clock_skew_seconds = seconds;
-        self
-    }
 }
 
 /// Result of verification
@@ -175,7 +157,7 @@ pub struct VerificationResult {
     /// Issuer from the certificate
     pub issuer: Option<String>,
     /// Integrated time from transparency log
-    pub integrated_time: Option<i64>,
+    pub integrated_time: Option<jiff::Timestamp>,
     /// Any warnings during verification
     pub warnings: Vec<String>,
 }
@@ -398,7 +380,6 @@ impl Verifier {
                 &self.trusted_root,
                 cert_info.not_before,
                 cert_info.not_after,
-                policy.clock_skew_seconds,
             )?;
 
             if let Some(time) = integrated_time {
