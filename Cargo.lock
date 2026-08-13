@@ -2105,7 +2105,6 @@ dependencies = [
  "sigstore-types",
  "spki",
  "thiserror",
- "tracing",
  "x509-cert",
 ]
 
