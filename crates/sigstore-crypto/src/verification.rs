@@ -4,9 +4,9 @@ use crate::error::{Error, Result};
 use crate::signing::SigningScheme;
 use aws_lc_rs::signature::{
     UnparsedPublicKey, ECDSA_P256_SHA256_ASN1, ECDSA_P256_SHA384_ASN1, ECDSA_P384_SHA256_ASN1,
-    ECDSA_P384_SHA384_ASN1, ED25519, RSA_PKCS1_2048_8192_SHA256, RSA_PKCS1_2048_8192_SHA384,
-    RSA_PKCS1_2048_8192_SHA512, RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384,
-    RSA_PSS_2048_8192_SHA512,
+    ECDSA_P384_SHA384_ASN1, ED25519, ML_DSA_44, ML_DSA_65, ML_DSA_87, RSA_PKCS1_2048_8192_SHA256,
+    RSA_PKCS1_2048_8192_SHA384, RSA_PKCS1_2048_8192_SHA512, RSA_PSS_2048_8192_SHA256,
+    RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
 };
 use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
 use const_oid::ObjectIdentifier;
@@ -162,6 +162,21 @@ impl VerificationKey {
                 key.verify(data, signature).map_err(|_| {
                     Error::Verification("RSA PKCS#1 SHA-512 signature invalid".to_string())
                 })
+            }
+            SigningScheme::MlDsa44 => {
+                let key = UnparsedPublicKey::new(&ML_DSA_44, &self.bytes);
+                key.verify(data, signature)
+                    .map_err(|_| Error::Verification("ML-DSA-44 signature invalid".to_string()))
+            }
+            SigningScheme::MlDsa65 => {
+                let key = UnparsedPublicKey::new(&ML_DSA_65, &self.bytes);
+                key.verify(data, signature)
+                    .map_err(|_| Error::Verification("ML-DSA-65 signature invalid".to_string()))
+            }
+            SigningScheme::MlDsa87 => {
+                let key = UnparsedPublicKey::new(&ML_DSA_87, &self.bytes);
+                key.verify(data, signature)
+                    .map_err(|_| Error::Verification("ML-DSA-87 signature invalid".to_string()))
             }
         }
     }
