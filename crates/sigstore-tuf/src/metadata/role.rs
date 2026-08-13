@@ -108,16 +108,11 @@ impl DelegatedRole {
     /// (the SHA-256 hex of the target path begins with the prefix) or one of its
     /// shell-style `paths` globs. A role with neither field authorizes nothing.
     ///
-    /// Glob matching uses [`globset`] with `literal_separator` enabled, i.e.
-    /// proper shell-glob semantics where a `*` (or `?`) does **not** cross a path
-    /// separator (`/`). This follows the TUF spec, whose own example notes that
-    /// `*.tgz` matches `foo.tgz` but not `targets/foo.tgz`; matching across `/`
-    /// (as plain `fnmatch` / globset's default does) would over-authorize a
-    /// delegation. A `paths` entry that is not a valid glob is a hard error
-    /// rather than a silent non-match, so a repository we cannot correctly
-    /// evaluate is rejected instead of having a delegation quietly ignored.
-    ///
-    /// [`globset`]: https://docs.rs/globset
+    /// Patterns are split on `/` and each segment is matched independently with
+    /// Unix shell-style glob semantics. This prevents `*`, `?`, character
+    /// classes, and the glob crate's `**` extension from crossing path
+    /// separators. A malformed pattern is a hard error rather than a silent
+    /// non-match.
     pub fn matches_path(&self, target_path: &str) -> Result<bool> {
         if let Some(prefixes) = &self.path_hash_prefixes {
             let hash = hex::encode(sigstore_crypto::sha256(target_path.as_bytes()).as_bytes());
@@ -125,22 +120,38 @@ impl DelegatedRole {
         }
         if let Some(paths) = &self.paths {
             for pattern in paths {
-                let glob = globset::GlobBuilder::new(pattern)
-                    .literal_separator(true)
-                    .build()
-                    .map_err(|e| {
-                        Error::Malformed(format!(
-                            "role {:?} has invalid delegation path pattern {pattern:?}: {e}",
-                            self.name
-                        ))
-                    })?;
-                if glob.compile_matcher().is_match(target_path) {
+                if path_pattern_matches(pattern, target_path).map_err(|e| {
+                    Error::Malformed(format!(
+                        "role {:?} has invalid delegation path pattern {pattern:?}: {e}",
+                        self.name
+                    ))
+                })? {
                     return Ok(true);
                 }
             }
         }
         Ok(false)
     }
+}
+
+fn path_pattern_matches(
+    pattern: &str,
+    target_path: &str,
+) -> std::result::Result<bool, glob::PatternError> {
+    let pattern_segments = pattern
+        .split('/')
+        .map(glob::Pattern::new)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let target_segments: Vec<_> = target_path.split('/').collect();
+
+    if pattern_segments.len() != target_segments.len() {
+        return Ok(false);
+    }
+
+    Ok(pattern_segments
+        .iter()
+        .zip(target_segments)
+        .all(|(pattern, target)| pattern.matches(target)))
 }
 
 #[cfg(test)]
@@ -176,6 +187,26 @@ mod tests {
         assert!(nested.matches_path("releases/x/x_v1").unwrap());
         assert!(!nested.matches_path("releases/x").unwrap());
         assert!(!nested.matches_path("releases/x/y/z").unwrap());
+
+        // Adjacent stars are still independent `*` tokens in TUF: neither may
+        // match `/`, so `**` must not acquire recursive-glob semantics.
+        let adjacent = with_paths(serde_json::json!(["releases/**"]));
+        assert!(adjacent.matches_path("releases/package").unwrap());
+        assert!(!adjacent.matches_path("releases/stable/package").unwrap());
+    }
+
+    #[test]
+    fn recursive_glob_extension_stays_within_one_segment() {
+        let r = with_paths(serde_json::json!(["**"]));
+        assert!(r.matches_path("").unwrap());
+        assert!(r.matches_path("package").unwrap());
+        assert!(!r.matches_path("stable/package").unwrap());
+
+        // Unsupported multi-star forms fail closed.
+        for pattern in ["***", "release-**.json"] {
+            let r = with_paths(serde_json::json!([pattern]));
+            assert!(r.matches_path("anything").is_err(), "{pattern}");
+        }
     }
 
     #[test]
@@ -183,9 +214,37 @@ mod tests {
         let r = with_paths(serde_json::json!(["foo-[0-9].tgz"]));
         assert!(r.matches_path("foo-2.tgz").unwrap());
         assert!(!r.matches_path("foo-a.tgz").unwrap());
+
+        let negated = with_paths(serde_json::json!(["foo-[!0-9].tgz"]));
+        assert!(negated.matches_path("foo-a.tgz").unwrap());
+        assert!(!negated.matches_path("foo-2.tgz").unwrap());
+
         let q = with_paths(serde_json::json!(["foo-?.tgz"]));
         assert!(q.matches_path("foo-x.tgz").unwrap());
+        assert!(q.matches_path("foo-🦀.tgz").unwrap());
         assert!(!q.matches_path("foo-xy.tgz").unwrap());
+        assert!(!q.matches_path("foo-/.tgz").unwrap());
+
+        // A separator cannot be smuggled into a segment through a class.
+        let slash_class = with_paths(serde_json::json!(["foo-[/].tgz"]));
+        assert!(slash_class.matches_path("foo-/.tgz").is_err());
+        let negated = with_paths(serde_json::json!(["foo-[!x].tgz"]));
+        assert!(!negated.matches_path("foo-/.tgz").unwrap());
+    }
+
+    #[test]
+    fn patterns_are_anchored_and_combined_with_or() {
+        let r = with_paths(serde_json::json!(["exact", "*.json"]));
+        assert!(r.matches_path("exact").unwrap());
+        assert!(r.matches_path("root.json").unwrap());
+        assert!(!r.matches_path("prefix-exact").unwrap());
+        assert!(!r.matches_path("root.json.suffix").unwrap());
+
+        // Braces are not part of TUF's path-pattern grammar and are literals,
+        // not a library-specific alternation extension.
+        let literal = with_paths(serde_json::json!(["{one,two}.json"]));
+        assert!(literal.matches_path("{one,two}.json").unwrap());
+        assert!(!literal.matches_path("one.json").unwrap());
     }
 
     #[test]
@@ -205,9 +264,11 @@ mod tests {
 
     #[test]
     fn invalid_pattern_is_a_hard_error() {
-        // An unparseable glob must fail closed, not silently fail to match.
-        let r = with_paths(serde_json::json!(["a[b"]));
-        assert!(r.matches_path("anything").is_err());
+        // An unparseable pattern must fail closed, not silently fail to match.
+        for pattern in ["a[b", "[]", "[!]"] {
+            let r = with_paths(serde_json::json!([pattern]));
+            assert!(r.matches_path("anything").is_err(), "{pattern}");
+        }
     }
 
     #[test]
