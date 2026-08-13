@@ -21,7 +21,7 @@ thiserror = { workspace = true }
 base64 = { workspace = true }
 pem = { workspace = true }
 x509-cert = { workspace = true }
-tracing = { workspace = true }
+jiff = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }

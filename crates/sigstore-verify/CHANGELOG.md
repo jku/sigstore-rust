@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.10.0...sigstore-verify-v0.11.0) - 2026-07-08
+
+### Fixed
+
+- *(verify)* source SCT issuer from the verified cert chain ([#154](https://github.com/sigstore/sigstore-rust/pull/154))
+
+### Other
+
+- *(verify)* [**breaking**] make invalid verification policies unrepresentable ([#155](https://github.com/sigstore/sigstore-rust/pull/155))
+
+## [0.10.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.9.0...sigstore-verify-v0.10.0) - 2026-06-29
+
+### Added
+
+- *(trust-root)* [**breaking**] support trusting custom Sigstore instances over TUF ([#136](https://github.com/sigstore/sigstore-rust/pull/136))
+
 ## [0.9.0](https://github.com/sigstore/sigstore-rust/compare/sigstore-verify-v0.8.0...sigstore-verify-v0.9.0) - 2026-06-17
 
 ### Other

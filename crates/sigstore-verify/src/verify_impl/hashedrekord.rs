@@ -188,17 +188,10 @@ fn validate_signature_match(
                 }
             }
             SignatureContent::DsseEnvelope(envelope) => {
-                // Compare against the first DSSE envelope signature
-                if let Some(first_sig) = envelope.signatures.first() {
-                    if &first_sig.sig != rekor_sig {
-                        return Err(Error::Verification(
-                            "DSSE signature in bundle does not match signature in Rekor entry"
-                                .to_string(),
-                        ));
-                    }
-                } else {
+                if &envelope.signature.sig != rekor_sig {
                     return Err(Error::Verification(
-                        "No signatures found in DSSE envelope".to_string(),
+                        "DSSE signature in bundle does not match signature in Rekor entry"
+                            .to_string(),
                     ));
                 }
             }
@@ -222,8 +215,11 @@ fn validate_integrated_time(entry: &TransparencyLogEntry, bundle: &Bundle) -> Re
         let bundle_cert_der = bundle_cert.as_bytes();
 
         // Only validate integrated time for hashedrekord 0.0.1
-        // For 0.0.2 (Rekor v2), integrated_time is not present (0)
-        if entry.kind_version.version == "0.0.1" && entry.integrated_time != 0 {
+        // For 0.0.2 (Rekor v2), integrated_time is not present
+        let v1_integrated_time = entry
+            .integrated_time
+            .filter(|_| entry.kind_version.version == "0.0.1");
+        if let Some(integrated_time) = v1_integrated_time {
             let cert = Certificate::from_der(bundle_cert_der).map_err(|e| {
                 Error::Verification(format!(
                     "failed to parse certificate for time validation: {}",
@@ -231,25 +227,13 @@ fn validate_integrated_time(entry: &TransparencyLogEntry, bundle: &Bundle) -> Re
                 ))
             })?;
 
-            // Convert certificate validity times to Unix timestamps
-            use std::time::UNIX_EPOCH;
-            let not_before_system = cert.tbs_certificate.validity.not_before.to_system_time();
-            let not_after_system = cert.tbs_certificate.validity.not_after.to_system_time();
-
-            let not_before = not_before_system
-                .duration_since(UNIX_EPOCH)
-                .map_err(|e| {
-                    Error::Verification(format!("failed to convert notBefore to Unix time: {}", e))
-                })?
-                .as_secs() as i64;
-            let not_after = not_after_system
-                .duration_since(UNIX_EPOCH)
-                .map_err(|e| {
-                    Error::Verification(format!("failed to convert notAfter to Unix time: {}", e))
-                })?
-                .as_secs() as i64;
-
-            let integrated_time = entry.integrated_time;
+            let not_before = jiff::Timestamp::try_from(
+                cert.tbs_certificate.validity.not_before.to_system_time(),
+            )
+            .map_err(|e| Error::Verification(format!("invalid notBefore time: {}", e)))?;
+            let not_after =
+                jiff::Timestamp::try_from(cert.tbs_certificate.validity.not_after.to_system_time())
+                    .map_err(|e| Error::Verification(format!("invalid notAfter time: {}", e)))?;
 
             if integrated_time < not_before || integrated_time > not_after {
                 return Err(Error::Verification(format!(
