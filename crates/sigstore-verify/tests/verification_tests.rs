@@ -1100,6 +1100,52 @@ fn test_foreign_tlog_entry_rejected_even_when_tlog_skipped() {
     );
 }
 
+/// Production trusted root with an extra tlog entry inserted at `index` whose
+/// `keyId` is too short to yield a 4-byte checkpoint key hint.
+fn production_root_with_unhintable_tlog_at(index: usize) -> TrustedRoot {
+    let mut root: serde_json::Value =
+        serde_json::from_str(SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+    let tlogs = root["tlogs"].as_array_mut().unwrap();
+    let mut bad = tlogs[0].clone();
+    bad["logId"]["keyId"] = serde_json::json!("AQID"); // decodes to 3 bytes
+    tlogs.insert(index, bad);
+    TrustedRoot::from_json(&serde_json::to_string(&root).unwrap()).unwrap()
+}
+
+/// A malformed Rekor log ID is rejected deterministically, regardless of its
+/// position in the trusted root. Keyring construction validates full SHA-256
+/// IDs before any checkpoint signature lookup occurs.
+#[test]
+fn test_malformed_rekor_log_id_is_rejected_regardless_of_position() {
+    let bundle = Bundle::from_json(COSIGN_V3_BLOB_BUNDLE).unwrap();
+    let artifact = include_bytes!("../test_data/bundles/cosign-v3-blob.txt");
+    let policy = VerificationPolicy::default();
+
+    let tlog_count = {
+        let root: serde_json::Value =
+            serde_json::from_str(SIGSTORE_PRODUCTION_TRUSTED_ROOT).unwrap();
+        root["tlogs"].as_array().unwrap().len()
+    };
+
+    let first = verify(
+        artifact,
+        &bundle,
+        &policy,
+        &production_root_with_unhintable_tlog_at(0),
+    );
+    let last = verify(
+        artifact,
+        &bundle,
+        &policy,
+        &production_root_with_unhintable_tlog_at(tlog_count),
+    );
+
+    let first = first.expect_err("the malformed key ID must be rejected");
+    let last = last.expect_err("the malformed key ID must be rejected");
+    assert_eq!(first.to_string(), last.to_string());
+    assert!(first.to_string().contains("SHA-256 hash must be 32 bytes"));
+}
+
 #[test]
 fn test_verify_fails_with_unknown_log_entry_kind() {
     let mut json_val: serde_json::Value = serde_json::from_str(HAPPY_PATH_V03_BUNDLE_DSSE).unwrap();

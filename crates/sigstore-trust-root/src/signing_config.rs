@@ -33,8 +33,8 @@
 //! let config = SigningConfig::from_json(SIGSTORE_PRODUCTION_SIGNING_CONFIG).unwrap();
 //! ```
 
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
+use sigstore_types::TimeRange;
 
 use crate::{Error, Result};
 
@@ -58,33 +58,6 @@ pub const SUPPORTED_FULCIO_VERSIONS: &[u32] = &[1];
 /// Expected media type for signing config v0.2
 pub const SIGNING_CONFIG_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.signingconfig.v0.2+json";
 
-/// Validity period for a service
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceValidityPeriod {
-    /// Start time of validity
-    pub start: Timestamp,
-    /// End time of validity (optional, None means still valid)
-    #[serde(default)]
-    pub end: Option<Timestamp>,
-}
-
-impl ServiceValidityPeriod {
-    /// Check if this period is currently valid
-    pub fn is_valid(&self) -> bool {
-        let now = Timestamp::now();
-        if now < self.start {
-            return false;
-        }
-        if let Some(end) = self.end {
-            if now >= end {
-                return false;
-            }
-        }
-        true
-    }
-}
-
 /// A service endpoint configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,7 +67,7 @@ pub struct ServiceEndpoint {
     /// Major API version supported by this endpoint
     pub major_api_version: u32,
     /// Validity period for this endpoint
-    pub valid_for: ServiceValidityPeriod,
+    pub valid_for: TimeRange,
     /// Operator of this service
     #[serde(default)]
     pub operator: Option<String>,
@@ -323,16 +296,38 @@ mod tests {
 
     #[test]
     fn test_service_validity() {
-        let valid_period = ServiceValidityPeriod {
+        let valid_period = TimeRange {
             start: "2020-01-01T00:00:00Z".parse().unwrap(),
             end: None,
         };
         assert!(valid_period.is_valid());
 
-        let expired_period = ServiceValidityPeriod {
+        let expired_period = TimeRange {
             start: "2020-01-01T00:00:00Z".parse().unwrap(),
             end: Some("2021-01-01T00:00:00Z".parse().unwrap()),
         };
         assert!(!expired_period.is_valid());
+    }
+
+    #[test]
+    fn test_service_endpoint_validity_is_a_time_range() {
+        // Service validity uses the protobuf-specs `TimeRange`; containment
+        // semantics are covered by `sigstore_types::TimeRange`.
+        let endpoint: ServiceEndpoint = serde_json::from_str(
+            r#"{
+                "url": "https://rekor.example.com",
+                "majorApiVersion": 1,
+                "validFor": {"start": "2020-01-01T00:00:00Z", "end": "2021-01-01T00:00:00Z"}
+            }"#,
+        )
+        .unwrap();
+
+        // Both bounds are included per the TimeRange spec
+        assert!(endpoint.valid_for.contains(endpoint.valid_for.start));
+        assert!(endpoint.valid_for.contains(endpoint.valid_for.end.unwrap()));
+        assert!(!endpoint
+            .valid_for
+            .contains("2021-01-01T00:00:01Z".parse().unwrap()));
+        assert!(!endpoint.is_valid());
     }
 }
