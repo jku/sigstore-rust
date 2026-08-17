@@ -2204,6 +2204,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "sha2",
  "sigstore-crypto",
  "sigstore-tuf",
  "sigstore-types",
