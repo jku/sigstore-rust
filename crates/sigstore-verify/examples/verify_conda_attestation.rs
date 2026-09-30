@@ -36,20 +36,43 @@ use std::process;
 async fn main() {
     let args: Vec<String> = env::args().collect();
 
-    if args.len() != 3 {
-        eprintln!("Usage: {} <CONDA_PACKAGE> <ATTESTATION>", args[0]);
-        eprintln!();
-        eprintln!("Arguments:");
-        eprintln!("  <CONDA_PACKAGE>  Path to the .conda package file");
-        eprintln!("  <ATTESTATION>    Path to the attestation bundle (.sigstore.json)");
-        eprintln!();
-        eprintln!("Example:");
-        eprintln!("  {} package.conda attestation.sigstore.json", args[0]);
+    let mut issuer: Option<String> = None;
+    let mut positional: Vec<String> = Vec::new();
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--issuer" | "-o" | "--certificate-oidc-issuer" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Error: --certificate-oidc-issuer requires a value");
+                    process::exit(1);
+                }
+                issuer = Some(args[i].clone());
+            }
+            "--help" | "-h" => {
+                print_usage(&args[0]);
+                process::exit(0);
+            }
+            arg if !arg.starts_with('-') => {
+                positional.push(arg.to_string());
+            }
+            unknown => {
+                eprintln!("Error: Unknown option: {}", unknown);
+                print_usage(&args[0]);
+                process::exit(1);
+            }
+        }
+        i += 1;
+    }
+
+    if positional.len() != 2 {
+        print_usage(&args[0]);
         process::exit(1);
     }
 
-    let artifact_path = &args[1];
-    let bundle_path = &args[2];
+    let artifact_path = &positional[0];
+    let bundle_path = &positional[1];
 
     // Read artifact
     let artifact = match fs::read(artifact_path) {
@@ -135,10 +158,11 @@ async fn main() {
         }
     }
 
-    // Build verification policy - for GitHub Actions attestations, we expect
-    // the identity to be the workflow file path and issuer to be GitHub
-    let policy = VerificationPolicy::any_identity()
-        .require_issuer("https://token.actions.githubusercontent.com");
+    // Build verification policy - default to GitHub Actions issuer if not specified
+    let issuer_str = issuer
+        .as_deref()
+        .unwrap_or("https://token.actions.githubusercontent.com");
+    let policy = VerificationPolicy::any_identity().require_issuer(issuer_str);
 
     // Verify
     println!();
@@ -168,4 +192,24 @@ async fn main() {
             process::exit(1);
         }
     }
+}
+
+fn print_usage(program: &str) {
+    eprintln!("Usage: {} [OPTIONS] <CONDA_PACKAGE> <ATTESTATION>", program);
+    eprintln!();
+    eprintln!("Arguments:");
+    eprintln!("  <CONDA_PACKAGE>  Path to the .conda package file");
+    eprintln!("  <ATTESTATION>    Path to the attestation bundle (.sigstore.json)");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  -o, --issuer, --certificate-oidc-issuer <ISSUER>");
+    eprintln!(
+        "                   Expected OIDC issuer URL (default: https://token.actions.githubusercontent.com)"
+    );
+    eprintln!("  -h, --help       Print this help message");
+    eprintln!();
+    eprintln!(
+        "Example:\n  {} package.conda attestation.sigstore.json",
+        program
+    );
 }
