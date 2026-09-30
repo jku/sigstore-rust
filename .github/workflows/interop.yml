@@ -9,6 +9,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  OIDC_ISSUER: "https://accounts.google.com"
+  OIDC_IDENTITY: "untrusted-sa@sigstore-conformance.iam.gserviceaccount.com"
 
 permissions: {}
 
@@ -16,12 +18,8 @@ jobs:
   interop:
     name: Interoperability Tests
     runs-on: ubuntu-latest
-    # Only run on push, workflow_dispatch, or PRs from the same repo (not forks)
-    # Fork PRs don't have access to OIDC tokens needed for signing
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     permissions:
-      id-token: write  # Required for OIDC token
-      contents: read   # Required for actions/checkout
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -32,6 +30,11 @@ jobs:
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Fetch test OIDC token
+        run: |
+          curl -sSfo oidc-token.txt https://storage.googleapis.com/sigstore-conformance-testing-token/untrusted-testing-token.txt
+          echo "SIGSTORE_ID_TOKEN=$(cat oidc-token.txt)" >> "$GITHUB_ENV"
 
       - name: Build release binaries
         run: cargo build --release -p sigstore-sign -p sigstore-verify --examples
@@ -58,7 +61,7 @@ jobs:
       # =========================================
       - name: "[V1] Sign with sigstore-rust"
         run: |
-          ./target/release/examples/sign_blob test-artifact.txt -o rust-signed.sigstore.json
+          ./target/release/examples/sign_blob --token "$SIGSTORE_ID_TOKEN" test-artifact.txt -o rust-signed.sigstore.json
           echo "Bundle created:"
           cat rust-signed.sigstore.json | jq -r '.mediaType'
 
@@ -67,7 +70,7 @@ jobs:
           cosign verify-blob \
             --bundle rust-signed.sigstore.json \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             test-artifact.txt
           echo "✅ Cosign successfully verified sigstore-rust signature (V1)"
 
@@ -75,7 +78,7 @@ jobs:
         run: |
           ./target/release/examples/verify_bundle \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             test-artifact.txt rust-signed.sigstore.json
           echo "✅ sigstore-rust successfully verified its own signature (V1)"
 
@@ -93,7 +96,7 @@ jobs:
         run: |
           ./target/release/examples/verify_bundle \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             test-artifact.txt cosign-signed.sigstore.json
           echo "✅ sigstore-rust successfully verified cosign signature (V1)"
 
@@ -102,7 +105,7 @@ jobs:
           cosign verify-blob \
             --bundle cosign-signed.sigstore.json \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             test-artifact.txt
           echo "✅ Cosign successfully verified its own signature (V1)"
 
@@ -113,7 +116,7 @@ jobs:
         run: |
           # The production signing config does not publish a Rekor v2 log yet,
           # so name the log explicitly instead of relying on a built-in default.
-          ./target/release/examples/sign_blob --v2 --rekor-url https://log2025-1.rekor.sigstore.dev \
+          ./target/release/examples/sign_blob --token "$SIGSTORE_ID_TOKEN" --v2 --rekor-url https://log2025-1.rekor.sigstore.dev \
             test-artifact-v2.txt -o rust-signed-v2.sigstore.json
           echo "Bundle created:"
           cat rust-signed-v2.sigstore.json | jq -r '.mediaType'
@@ -126,7 +129,7 @@ jobs:
           cosign verify-blob \
             --bundle rust-signed-v2.sigstore.json \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             --use-signed-timestamps \
             test-artifact-v2.txt
           echo "✅ Cosign successfully verified sigstore-rust V2 signature"
@@ -135,7 +138,7 @@ jobs:
         run: |
           ./target/release/examples/verify_bundle \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             test-artifact-v2.txt rust-signed-v2.sigstore.json
           echo "✅ sigstore-rust successfully verified its own V2 signature"
 
@@ -152,7 +155,7 @@ jobs:
         run: |
           ./target/release/examples/verify_bundle \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             test-artifact-v2.txt cosign-signed-v2.sigstore.json
           echo "✅ sigstore-rust successfully verified cosign V2 signature"
 
@@ -161,7 +164,7 @@ jobs:
           cosign verify-blob \
             --bundle cosign-signed-v2.sigstore.json \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             test-artifact-v2.txt
           echo "✅ Cosign successfully verified its own V2 signature"
 
@@ -170,14 +173,14 @@ jobs:
       # =========================================
       - name: "[Digest] Sign with sigstore-rust"
         run: |
-          ./target/release/examples/sign_blob digest-test.txt -o digest-bundle.sigstore.json
+          ./target/release/examples/sign_blob --token "$SIGSTORE_ID_TOKEN" digest-test.txt -o digest-bundle.sigstore.json
 
       - name: "[Digest] Verify with cosign using digest"
         run: |
           cosign verify-blob \
             --bundle digest-bundle.sigstore.json \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             ${ARTIFACT_DIGEST}
           echo "✅ Cosign verified using digest"
 
@@ -185,7 +188,7 @@ jobs:
         run: |
           ./target/release/examples/verify_bundle \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             ${ARTIFACT_DIGEST} digest-bundle.sigstore.json
           echo "✅ sigstore-rust verified using digest"
 
@@ -200,7 +203,7 @@ jobs:
         run: |
           ./target/release/examples/verify_bundle \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             ${ARTIFACT_DIGEST} cosign-digest-bundle.sigstore.json
           echo "✅ sigstore-rust verified cosign bundle using digest"
 
@@ -210,6 +213,7 @@ jobs:
       - name: "[DSSE] Attest with sigstore-rust"
         run: |
           ./target/release/examples/sign_attestation \
+            --token "$SIGSTORE_ID_TOKEN" \
             --channel "https://example.com/test-channel" \
             test-package.txt -o rust-attestation.sigstore.json
           echo "Attestation bundle created:"
@@ -222,7 +226,7 @@ jobs:
           cosign verify-blob-attestation \
             --bundle rust-attestation.sigstore.json \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             --type "https://schemas.conda.org/attestations-publish-1.schema.json" \
             test-package.txt
           echo "✅ Cosign successfully verified sigstore-rust attestation"
@@ -230,6 +234,7 @@ jobs:
       - name: "[DSSE] Verify sigstore-rust attestation with sigstore-rust"
         run: |
           ./target/release/examples/verify_conda_attestation \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             test-package.txt rust-attestation.sigstore.json
           echo "✅ sigstore-rust successfully verified its own attestation"
 
@@ -254,6 +259,7 @@ jobs:
       - name: "[DSSE] Verify cosign attestation with sigstore-rust"
         run: |
           ./target/release/examples/verify_conda_attestation \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             test-package.txt cosign-attestation.sigstore.json
           echo "✅ sigstore-rust successfully verified cosign attestation"
 
@@ -262,7 +268,7 @@ jobs:
           cosign verify-blob-attestation \
             --bundle cosign-attestation.sigstore.json \
             --certificate-identity-regexp ".*" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-oidc-issuer "${OIDC_ISSUER}" \
             --type "https://schemas.conda.org/attestations-publish-1.schema.json" \
             test-package.txt
           echo "✅ Cosign successfully verified its own attestation"
@@ -282,33 +288,28 @@ jobs:
 
       - name: "[Python] Verify sigstore-rust V1 bundle"
         run: |
-          # GitHub Actions identity is the workflow file URL
-          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/interop.yml@${GITHUB_REF}"
-          echo "Expected identity: $IDENTITY"
           sigstore verify identity \
             --bundle rust-signed.sigstore.json \
-            --cert-identity "$IDENTITY" \
-            --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --cert-identity "${OIDC_IDENTITY}" \
+            --cert-oidc-issuer "${OIDC_ISSUER}" \
             test-artifact.txt
           echo "✅ sigstore-python verified sigstore-rust V1 bundle"
 
       - name: "[Python] Verify sigstore-rust V2 bundle"
         run: |
-          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/interop.yml@${GITHUB_REF}"
           sigstore verify identity \
             --bundle rust-signed-v2.sigstore.json \
-            --cert-identity "$IDENTITY" \
-            --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --cert-identity "${OIDC_IDENTITY}" \
+            --cert-oidc-issuer "${OIDC_ISSUER}" \
             test-artifact-v2.txt
           echo "✅ sigstore-python verified sigstore-rust V2 bundle"
 
       - name: "[Python] Verify sigstore-rust attestation"
         run: |
-          IDENTITY="https://github.com/${GITHUB_REPOSITORY}/.github/workflows/interop.yml@${GITHUB_REF}"
           sigstore verify identity \
             --bundle rust-attestation.sigstore.json \
-            --cert-identity "$IDENTITY" \
-            --cert-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --cert-identity "${OIDC_IDENTITY}" \
+            --cert-oidc-issuer "${OIDC_ISSUER}" \
             test-package.txt
           echo "✅ sigstore-python verified sigstore-rust attestation"
 
