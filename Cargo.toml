@@ -52,7 +52,7 @@ tls_codec = { version = "0.4", default-features = false, features = ["derive"] }
 
 # RFC 3161 timestamp verification
 cms = { version = "0.2", default-features = false }
-rustls-webpki = { version = "0.103", default-features = false, features = ["alloc", "std", "aws-lc-rs"] }
+rustls-webpki = { version = "0.103", default-features = false, features = ["alloc", "std"] }
 rustls-pki-types = { version = "1.14", default-features = false, features = ["alloc"] }
 
 # Ambient ID

@@ -17,6 +17,7 @@ thiserror = { workspace = true }
 x509-cert = { workspace = true }
 jiff = { workspace = true }
 futures-io = { workspace = true }
+rustls-pki-types = { workspace = true }
 
 [dev-dependencies]
 base64 = { workspace = true }
