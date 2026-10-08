@@ -35,6 +35,13 @@ rustls = [
   "sigstore-tsa/rustls",
   "sigstore-trust-root/rustls",
 ]
+rustls-no-provider = [
+  "sigstore-rekor/rustls-no-provider",
+  "sigstore-fulcio/rustls-no-provider",
+  "sigstore-oidc/rustls-no-provider",
+  "sigstore-tsa/rustls-no-provider",
+  "sigstore-trust-root/rustls-no-provider",
+]
 native-tls = [
   "sigstore-rekor/native-tls",
   "sigstore-fulcio/native-tls",

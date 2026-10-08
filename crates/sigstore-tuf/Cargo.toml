@@ -13,6 +13,7 @@ default = ["fetch", "rustls"]
 fetch = ["reqwest", "url"]
 # TLS backend selection (matches the rest of the workspace's crates).
 rustls = ["fetch", "reqwest/rustls"]
+rustls-no-provider = ["fetch", "reqwest/rustls-no-provider"]
 native-tls = ["fetch", "reqwest/native-tls"]
 
 [dependencies]
