@@ -10,6 +10,7 @@ rust-version.workspace = true
 [features]
 default = ["rustls"]
 rustls = ["reqwest/rustls", "sigstore-oidc/rustls"]
+rustls-no-provider = ["reqwest/rustls-no-provider", "sigstore-oidc/rustls-no-provider"]
 native-tls = ["reqwest/native-tls", "sigstore-oidc/native-tls"]
 
 [dependencies]

@@ -11,6 +11,7 @@ rust-version.workspace = true
 default = ["rustls"]
 client = ["dep:reqwest"]
 rustls = ["client", "reqwest/rustls"]
+rustls-no-provider = ["client", "reqwest/rustls-no-provider"]
 native-tls = ["client", "reqwest/native-tls"]
 
 [dependencies]

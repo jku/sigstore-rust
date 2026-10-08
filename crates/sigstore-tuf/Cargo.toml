@@ -13,6 +13,7 @@ default = ["rustls"]
 client = ["dep:reqwest", "dep:url"]
 # TLS backend selection (matches the rest of the workspace's crates).
 rustls = ["client", "reqwest/rustls"]
+rustls-no-provider = ["client", "reqwest/rustls-no-provider"]
 native-tls = ["client", "reqwest/native-tls"]
 
 [dependencies]
