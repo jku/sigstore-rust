@@ -2055,6 +2055,7 @@ dependencies = [
  "hex",
  "insta",
  "jiff",
+ "rustls-pki-types",
  "sigstore-types",
  "spki",
  "thiserror",

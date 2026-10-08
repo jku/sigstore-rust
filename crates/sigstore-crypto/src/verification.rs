@@ -153,6 +153,12 @@ impl VerificationKey {
         }
     }
 
+    /// Create a verification key from raw `subjectPublicKey` bit-string bytes
+    /// and a known signing scheme.
+    pub(crate) fn from_raw_bytes(bytes: Vec<u8>, scheme: SigningScheme) -> Self {
+        Self { bytes, scheme }
+    }
+
     /// Get the raw public key bytes
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
