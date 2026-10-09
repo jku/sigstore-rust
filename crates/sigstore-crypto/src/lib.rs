@@ -1,9 +1,12 @@
 //! Cryptographic primitives for Sigstore
 //!
 //! This crate provides key generation, signing, and verification functionality
-//! using aws-lc-rs as the cryptographic backend.
+//! using `aws-lc-rs` (default) or `boring` as the cryptographic backend.
 
 #![warn(missing_docs)]
+
+#[cfg(not(any(feature = "aws-lc-rs", feature = "boring")))]
+compile_error!("Either feature \"aws-lc-rs\" or \"boring\" must be enabled for sigstore-crypto.");
 
 pub mod checkpoint;
 pub mod error;

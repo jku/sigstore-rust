@@ -11,9 +11,9 @@ publish = false
 [dependencies]
 
 [dev-dependencies]
-sigstore-rekor = { workspace = true }
+sigstore-rekor = { workspace = true, features = ["aws-lc-rs"] }
 sigstore-types = { workspace = true }
-sigstore-trust-root = { workspace = true, default-features = false }
+sigstore-trust-root = { workspace = true, default-features = false, features = ["aws-lc-rs"] }
 sigstore_protobuf_specs = "0.5.1"
 serde = { workspace = true }
 serde_json = { workspace = true }

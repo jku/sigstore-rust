@@ -14,4 +14,4 @@ jiff = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-sigstore-merkle = { workspace = true }
+sigstore-merkle = { workspace = true, features = ["aws-lc-rs"] }

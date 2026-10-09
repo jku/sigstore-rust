@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["aws-lc-rs"]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
+boring = ["sigstore-crypto/boring"]
+
 [dependencies]
 sigstore-types = { workspace = true }
 sigstore-crypto = { workspace = true }

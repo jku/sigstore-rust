@@ -27,7 +27,7 @@ hex = { workspace = true }
 sigstore-trust-root = { workspace = true, features = ["tuf"] }
 
 [features]
-default = ["rustls", "browser", "tuf"]
+default = ["rustls", "browser", "tuf", "aws-lc-rs"]
 rustls = [
   "sigstore-rekor/rustls",
   "sigstore-fulcio/rustls",
@@ -48,6 +48,22 @@ native-tls = [
   "sigstore-oidc/native-tls",
   "sigstore-tsa/native-tls",
   "sigstore-trust-root/native-tls",
+]
+aws-lc-rs = [
+  "sigstore-crypto/aws-lc-rs",
+  "sigstore-rekor/aws-lc-rs",
+  "sigstore-fulcio/aws-lc-rs",
+  "sigstore-oidc/aws-lc-rs",
+  "sigstore-tsa/aws-lc-rs",
+  "sigstore-trust-root/aws-lc-rs",
+]
+boring = [
+  "sigstore-crypto/boring",
+  "sigstore-rekor/boring",
+  "sigstore-fulcio/boring",
+  "sigstore-oidc/boring",
+  "sigstore-tsa/boring",
+  "sigstore-trust-root/boring",
 ]
 # Enable automatic browser opening for authentication
 browser = ["sigstore-oidc/browser"]

@@ -8,13 +8,15 @@ repository.workspace = true
 rust-version.workspace = true
 
 [features]
-default = ["fetch", "rustls"]
+default = ["fetch", "rustls", "aws-lc-rs"]
 # Network transport (async HTTP) for fetching remote TUF metadata and targets.
 fetch = ["reqwest", "url"]
 # TLS backend selection (matches the rest of the workspace's crates).
 rustls = ["fetch", "reqwest/rustls"]
 rustls-no-provider = ["fetch", "reqwest/rustls-no-provider"]
 native-tls = ["fetch", "reqwest/native-tls"]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
+boring = ["sigstore-crypto/boring"]
 
 [dependencies]
 # Internal dependencies

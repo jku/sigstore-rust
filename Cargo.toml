@@ -35,6 +35,7 @@ thiserror = "2.0"
 
 # Cryptography
 aws-lc-rs = { version = "1.18" }
+boring = { version = "5", features = ["mldsa"] }
 sha2 = "0.11"
 digest = "0.11"
 signature = "3.0"
@@ -102,8 +103,8 @@ open = "5.3"
 
 # Internal crates (path + version for publishing)
 sigstore-types = { path = "crates/sigstore-types", version = "0.14.0" }
-sigstore-crypto = { path = "crates/sigstore-crypto", version = "0.14.0" }
-sigstore-merkle = { path = "crates/sigstore-merkle", version = "0.14.0" }
+sigstore-crypto = { path = "crates/sigstore-crypto", version = "0.14.0", default-features = false }
+sigstore-merkle = { path = "crates/sigstore-merkle", version = "0.14.0", default-features = false }
 sigstore-tsa = { path = "crates/sigstore-tsa", version = "0.14.0", default-features = false }
 sigstore-trust-root = { path = "crates/sigstore-trust-root", version = "0.14.0", default-features = false }
 sigstore-tuf = { path = "crates/sigstore-tuf", version = "0.14.0", default-features = false }

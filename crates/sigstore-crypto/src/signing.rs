@@ -1,7 +1,8 @@
-//! Key generation and signing using aws-lc-rs
+//! Key generation and signing
 
 use crate::error::{Error, Result};
 use crate::hash::Sha256Hasher;
+#[cfg(feature = "aws-lc-rs")]
 use aws_lc_rs::{
     digest::{Digest, SHA256},
     rand::SystemRandom,
@@ -195,8 +196,18 @@ impl KeyAlgorithm {
 /// types can be supported without changing this type.
 pub struct KeyPair(KeyPairInner);
 
+#[cfg(feature = "aws-lc-rs")]
 enum KeyPairInner {
     EcdsaP256(EcdsaKeyPair),
+}
+
+#[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+enum KeyPairInner {
+    EcdsaP256 {
+        ec_key: boring::ec::EcKey<boring::pkey::Private>,
+        pkey: boring::pkey::PKey<boring::pkey::Private>,
+        public_key_bytes: Vec<u8>,
+    },
 }
 
 impl std::fmt::Debug for KeyPair {
@@ -214,12 +225,27 @@ impl KeyPair {
     pub fn generate(algorithm: KeyAlgorithm) -> Result<Self> {
         match algorithm {
             KeyAlgorithm::EcdsaP256 => {
-                let rng = SystemRandom::new();
-                let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng)
-                    .map_err(|_| {
-                        Error::KeyGeneration("failed to generate ECDSA P-256 key".to_string())
+                #[cfg(feature = "aws-lc-rs")]
+                {
+                    let rng = SystemRandom::new();
+                    let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng)
+                        .map_err(|_| {
+                            Error::KeyGeneration("failed to generate ECDSA P-256 key".into())
+                        })?;
+                    Self::from_pkcs8_der(pkcs8.as_ref())
+                }
+                #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+                {
+                    let group =
+                        boring::ec::EcGroup::from_curve_name(boring::nid::Nid::X9_62_PRIME256V1)
+                            .map_err(|_| {
+                                Error::KeyGeneration("failed to generate ECDSA P-256 key".into())
+                            })?;
+                    let ec_key = boring::ec::EcKey::generate(&group).map_err(|_| {
+                        Error::KeyGeneration("failed to generate ECDSA P-256 key".into())
                     })?;
-                Self::from_pkcs8_der(pkcs8.as_ref())
+                    Self::from_boring_ec_key(ec_key)
+                }
             }
             other => Err(Error::UnsupportedAlgorithm(format!(
                 "key generation is not supported for {other:?}"
@@ -236,32 +262,88 @@ impl KeyPair {
     ///
     /// Only ECDSA P-256 keys are supported today.
     pub fn from_pkcs8_der(pkcs8: &[u8]) -> Result<Self> {
-        let key_pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8)
+        #[cfg(feature = "aws-lc-rs")]
+        {
+            let key_pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8)
+                .map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
+            Ok(Self(KeyPairInner::EcdsaP256(key_pair)))
+        }
+        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+        {
+            let pkey = boring::pkey::PKey::private_key_from_pkcs8(pkcs8)
+                .map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
+            let ec_key = pkey
+                .ec_key()
+                .map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
+            if ec_key.group().curve_name() != Some(boring::nid::Nid::X9_62_PRIME256V1) {
+                return Err(Error::InvalidKeyFormat(
+                    "expected ECDSA P-256 private key".to_string(),
+                ));
+            }
+            ec_key
+                .check_key()
+                .map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
+            Self::from_boring_ec_key(ec_key)
+        }
+    }
+
+    #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+    fn from_boring_ec_key(ec_key: boring::ec::EcKey<boring::pkey::Private>) -> Result<Self> {
+        let mut ctx =
+            boring::bn::BigNumContext::new().map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
+        let public_key_bytes = ec_key
+            .public_key()
+            .to_bytes(
+                ec_key.group(),
+                boring::ec::PointConversionForm::UNCOMPRESSED,
+                &mut ctx,
+            )
             .map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
-        Ok(Self(KeyPairInner::EcdsaP256(key_pair)))
+        let pkey = boring::pkey::PKey::from_ec_key(ec_key.clone())
+            .map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
+        Ok(Self(KeyPairInner::EcdsaP256 {
+            ec_key,
+            pkey,
+            public_key_bytes,
+        }))
     }
 
     /// The key algorithm of this key pair.
     pub fn algorithm(&self) -> KeyAlgorithm {
         match &self.0 {
-            KeyPairInner::EcdsaP256(_) => KeyAlgorithm::EcdsaP256,
+            KeyPairInner::EcdsaP256 { .. } => KeyAlgorithm::EcdsaP256,
         }
     }
 
     /// Get the raw public key bytes (for ECDSA, the uncompressed SEC1 point)
     pub fn public_key_bytes(&self) -> &[u8] {
         match &self.0 {
+            #[cfg(feature = "aws-lc-rs")]
             KeyPairInner::EcdsaP256(kp) => kp.public_key().as_ref(),
+            #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+            KeyPairInner::EcdsaP256 {
+                public_key_bytes, ..
+            } => public_key_bytes.as_slice(),
         }
     }
 
     /// Sign data with this key pair
     pub fn sign(&self, data: &[u8]) -> Result<SignatureBytes> {
-        let rng = SystemRandom::new();
         match &self.0 {
+            #[cfg(feature = "aws-lc-rs")]
             KeyPairInner::EcdsaP256(kp) => {
+                let rng = SystemRandom::new();
                 let sig = kp.sign(&rng, data).map_err(signing_failed)?;
                 Ok(SignatureBytes::new(sig.as_ref().to_vec()))
+            }
+            #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+            KeyPairInner::EcdsaP256 { pkey, .. } => {
+                let mut signer =
+                    boring::sign::Signer::new(boring::hash::MessageDigest::sha256(), pkey)
+                        .map_err(signing_failed)?;
+                signer.update(data).map_err(signing_failed)?;
+                let sig = signer.sign_to_vec().map_err(signing_failed)?;
+                Ok(SignatureBytes::new(sig))
             }
         }
     }
@@ -277,17 +359,26 @@ impl KeyPair {
     ///
     /// Returns the message digest along with the signature.
     pub fn sign_prehashed(&self, hasher: Sha256Hasher) -> Result<(Sha256Hash, SignatureBytes)> {
-        let digest = hasher.finish_digest();
-        match &self.0 {
-            KeyPairInner::EcdsaP256(kp) => {
-                let sig = kp.sign_digest(&digest).map_err(signing_failed)?;
-                let mut hash = [0u8; 32];
-                hash.copy_from_slice(digest.as_ref());
-                Ok((
-                    Sha256Hash::new(hash),
-                    SignatureBytes::new(sig.as_ref().to_vec()),
-                ))
+        #[cfg(feature = "aws-lc-rs")]
+        {
+            let digest = hasher.finish_digest();
+            match &self.0 {
+                KeyPairInner::EcdsaP256(kp) => {
+                    let sig = kp.sign_digest(&digest).map_err(signing_failed)?;
+                    let mut hash = [0u8; 32];
+                    hash.copy_from_slice(digest.as_ref());
+                    Ok((
+                        Sha256Hash::new(hash),
+                        SignatureBytes::new(sig.as_ref().to_vec()),
+                    ))
+                }
             }
+        }
+        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+        {
+            let digest = hasher.finalize();
+            let sig = self.sign_digest(&digest)?;
+            Ok((digest, sig))
         }
     }
 
@@ -296,12 +387,26 @@ impl KeyPair {
     /// This attests to the digest supplied by the caller; the original message
     /// is not available for the library to hash or otherwise inspect.
     pub fn sign_digest(&self, digest: &Sha256Hash) -> Result<SignatureBytes> {
-        let digest = Digest::import_less_safe(digest.as_bytes(), &SHA256)
-            .map_err(|_| Error::Signing("invalid SHA-256 digest".to_string()))?;
-        match &self.0 {
-            KeyPairInner::EcdsaP256(kp) => {
-                let sig = kp.sign_digest(&digest).map_err(signing_failed)?;
-                Ok(SignatureBytes::new(sig.as_ref().to_vec()))
+        #[cfg(feature = "aws-lc-rs")]
+        {
+            let digest = Digest::import_less_safe(digest.as_bytes(), &SHA256)
+                .map_err(|_| Error::Signing("invalid SHA-256 digest".to_string()))?;
+            match &self.0 {
+                KeyPairInner::EcdsaP256(kp) => {
+                    let sig = kp.sign_digest(&digest).map_err(signing_failed)?;
+                    Ok(SignatureBytes::new(sig.as_ref().to_vec()))
+                }
+            }
+        }
+        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+        {
+            match &self.0 {
+                KeyPairInner::EcdsaP256 { ec_key, .. } => {
+                    let sig = boring::ecdsa::EcdsaSig::sign(digest.as_bytes(), ec_key)
+                        .map_err(signing_failed)?;
+                    let der = sig.to_der().map_err(signing_failed)?;
+                    Ok(SignatureBytes::new(der))
+                }
             }
         }
     }
@@ -317,7 +422,7 @@ impl KeyPair {
     /// Use `.to_pem()` on the result if you need PEM format.
     pub fn public_key_der(&self) -> Result<DerPublicKey> {
         match &self.0 {
-            KeyPairInner::EcdsaP256(kp) => {
+            KeyPairInner::EcdsaP256 { .. } => {
                 let alg_id = AlgorithmIdentifier {
                     oid: ID_EC_PUBLIC_KEY,
                     parameters: Some(
@@ -326,7 +431,7 @@ impl KeyPair {
                     ),
                 };
 
-                let pub_key_bytes = kp.public_key().as_ref();
+                let pub_key_bytes = self.public_key_bytes();
 
                 let spki = SubjectPublicKeyInfo {
                     algorithm: alg_id,
@@ -341,7 +446,13 @@ impl KeyPair {
     }
 }
 
+#[cfg(feature = "aws-lc-rs")]
 fn signing_failed(_: aws_lc_rs::error::Unspecified) -> Error {
+    Error::Signing("the cryptographic backend failed to sign".to_string())
+}
+
+#[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+fn signing_failed(_: boring::error::ErrorStack) -> Error {
     Error::Signing("the cryptographic backend failed to sign".to_string())
 }
 
@@ -415,10 +526,24 @@ mod tests {
 
     #[test]
     fn key_pair_is_opaque_and_round_trips_pkcs8() {
-        use aws_lc_rs::signature::EcdsaKeyPair;
-        let rng = SystemRandom::new();
-        let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng).unwrap();
-        let key = KeyPair::from_pkcs8_der(pkcs8.as_ref()).unwrap();
+        #[cfg(feature = "aws-lc-rs")]
+        let pkcs8 = {
+            use aws_lc_rs::signature::EcdsaKeyPair;
+            let rng = SystemRandom::new();
+            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng)
+                .unwrap()
+                .as_ref()
+                .to_vec()
+        };
+        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+        let pkcs8 = {
+            let group =
+                boring::ec::EcGroup::from_curve_name(boring::nid::Nid::X9_62_PRIME256V1).unwrap();
+            let ec_key = boring::ec::EcKey::generate(&group).unwrap();
+            let pkey = boring::pkey::PKey::from_ec_key(ec_key).unwrap();
+            pkey.private_key_to_der_pkcs8().unwrap()
+        };
+        let key = KeyPair::from_pkcs8_der(&pkcs8).unwrap();
         assert_eq!(key.algorithm(), KeyAlgorithm::EcdsaP256);
         assert_eq!(key.default_scheme(), SigningScheme::EcdsaP256Sha256);
         assert_eq!(format!("{key:?}"), "KeyPair { algorithm: EcdsaP256, .. }");
