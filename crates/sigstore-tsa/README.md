@@ -16,8 +16,9 @@ Timestamps provide trusted third-party evidence of when a signature was created,
 - **Multiple TSAs**: Built-in support for Sigstore TSA and FreeTSA
 
 HTTP clients require the `client` feature, enabled by the default `rustls` feature.
-Use `default-features = false` for offline ASN.1 parsing and timestamp verification
-without reqwest or Tokio. `native-tls` enables the client with the alternative TLS backend.
+Use `default-features = false, features = ["aws-lc-rs"]` (or `["boring"]`) for offline
+ASN.1 parsing and timestamp verification without reqwest or Tokio. `native-tls` enables
+the client with the alternative TLS backend.
 
 ## Usage
 

@@ -158,6 +158,10 @@ impl IdentityToken {
     ///
     /// This attempts to find OIDC credentials in environments like GitHub Actions,
     /// GitLab CI, Buildkite, etc. using the `ambient-id` crate.
+    ///
+    /// Note: Because `ambient-id` only exposes `rustls` and `native-tls` features,
+    /// providers that make outbound HTTPS requests (such as GitHub Actions) require
+    /// either the `rustls` or `native-tls` feature to be enabled.
     pub async fn detect_ambient() -> Result<Option<Self>> {
         match Detector::new().detect("sigstore").await {
             Ok(Some(token)) => Self::from_jwt(token.reveal()).map(Some),

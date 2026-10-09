@@ -12,8 +12,8 @@ default = ["tuf", "rustls", "aws-lc-rs"]
 rustls = ["sigstore-tuf?/rustls"]
 rustls-no-provider = ["sigstore-tuf?/rustls-no-provider"]
 native-tls = ["sigstore-tuf?/native-tls"]
-aws-lc-rs = ["sigstore-crypto/aws-lc-rs", "sigstore-tuf?/aws-lc-rs"]
-boring = ["sigstore-crypto/boring", "sigstore-tuf?/boring"]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
+boring = ["sigstore-crypto/boring"]
 tuf = [
   "dep:sigstore-tuf",
   "dep:tokio",

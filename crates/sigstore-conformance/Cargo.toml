@@ -24,18 +24,8 @@ native-tls = [
   "sigstore-verify/native-tls",
   "sigstore-oidc/native-tls",
 ]
-aws-lc-rs = [
-  "sigstore-sign/aws-lc-rs",
-  "sigstore-verify/aws-lc-rs",
-  "sigstore-oidc/aws-lc-rs",
-  "sigstore-trust-root/aws-lc-rs",
-]
-boring = [
-  "sigstore-sign/boring",
-  "sigstore-verify/boring",
-  "sigstore-oidc/boring",
-  "sigstore-trust-root/boring",
-]
+aws-lc-rs = ["sigstore-sign/aws-lc-rs"]
+boring = ["sigstore-sign/boring"]
 
 [dependencies]
 sigstore-sign = { workspace = true }

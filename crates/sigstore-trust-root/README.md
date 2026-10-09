@@ -80,12 +80,13 @@ independent, so either bootstrap policy can also be used with `.offline()`.
 ## Cargo Features
 
 - `tuf` (default) - Enable TUF-based secure fetching of trusted roots
+- `aws-lc-rs` (default) / `boring` - Select the cryptographic backend
 
 To opt out of TUF support:
 
 ```toml
 [dependencies]
-sigstore-trust-root = { version = "0.1", default-features = false }
+sigstore-trust-root = { version = "0.1", default-features = false, features = ["aws-lc-rs"] }
 ```
 
 ## Updating the Embedded Data

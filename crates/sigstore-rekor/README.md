@@ -4,8 +4,9 @@ Rekor transparency-log client for [sigstore-rust](https://github.com/sigstore/si
 
 ## Features
 
-Default features enable the HTTP `client` with `rustls`. For offline entry/body
-parsing and `LogEntry::to_bundle_entry`, use `default-features = false`; neither
+Default features enable the HTTP `client` with `rustls` and the `aws-lc-rs` crypto
+backend. For offline entry/body parsing and `LogEntry::to_bundle_entry`, use
+`default-features = false, features = ["aws-lc-rs"]` (or `["boring"]`); neither
 reqwest nor Tokio is then required. `native-tls` selects the alternative HTTP TLS
 backend.
 

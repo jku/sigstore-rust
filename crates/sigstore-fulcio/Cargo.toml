@@ -12,8 +12,8 @@ default = ["rustls", "aws-lc-rs"]
 rustls = ["reqwest/rustls", "sigstore-oidc/rustls"]
 rustls-no-provider = ["reqwest/rustls-no-provider", "sigstore-oidc/rustls-no-provider"]
 native-tls = ["reqwest/native-tls", "sigstore-oidc/native-tls"]
-aws-lc-rs = ["sigstore-crypto/aws-lc-rs", "sigstore-oidc/aws-lc-rs"]
-boring = ["sigstore-crypto/boring", "sigstore-oidc/boring"]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
+boring = ["sigstore-crypto/boring"]
 
 [dependencies]
 sigstore-types = { workspace = true }

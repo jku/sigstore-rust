@@ -49,17 +49,5 @@ rustls = ["sigstore-trust-root/rustls"]
 rustls-no-provider = ["sigstore-trust-root/rustls-no-provider"]
 native-tls = ["sigstore-trust-root/native-tls"]
 tuf = ["sigstore-trust-root/tuf"]
-aws-lc-rs = [
-  "sigstore-crypto/aws-lc-rs",
-  "sigstore-merkle/aws-lc-rs",
-  "sigstore-trust-root/aws-lc-rs",
-  "sigstore-rekor/aws-lc-rs",
-  "sigstore-tsa/aws-lc-rs",
-]
-boring = [
-  "sigstore-crypto/boring",
-  "sigstore-merkle/boring",
-  "sigstore-trust-root/boring",
-  "sigstore-rekor/boring",
-  "sigstore-tsa/boring",
-]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
+boring = ["sigstore-crypto/boring"]

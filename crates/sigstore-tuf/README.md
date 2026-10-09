@@ -42,12 +42,13 @@ let trusted_root = updater
 - `fetch` (default) — async HTTP transport for fetching remote metadata and targets
 - `rustls` (default) — use rustls as the TLS backend
 - `native-tls` — use the platform's native TLS backend instead
+- `aws-lc-rs` (default) / `boring` — select the cryptographic backend
 
 To use the verification core without any network transport:
 
 ```toml
 [dependencies]
-sigstore-tuf = { version = "0.8", default-features = false }
+sigstore-tuf = { version = "0.8", default-features = false, features = ["aws-lc-rs"] }
 ```
 
 ## Architecture
