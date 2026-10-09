@@ -35,3 +35,20 @@ for package, flags in [
     forbidden = dependencies & {"reqwest", "hyper", "tokio"}
     if forbidden:
         raise SystemExit(f"{package} unexpectedly requires {sorted(forbidden)}")
+
+# Consumers opting out of default features must not regain a hidden aws-lc-rs dependency.
+for package, flags in [
+    ("sigstore-crypto", ["--no-default-features"]),
+    ("sigstore-verify", ["--no-default-features"]),
+    ("sigstore-trust-root", ["--no-default-features"]),
+    ("sigstore-rekor", ["--no-default-features"]),
+    ("sigstore-tsa", ["--no-default-features"]),
+]:
+    tree = subprocess.check_output(
+        ["cargo", "tree", "--locked", "--package", package,
+         "--edges", "normal", "--prefix", "none", *flags], text=True,
+    )
+    dependencies = {line.split()[0] for line in tree.splitlines() if line.strip()}
+    if "aws-lc-rs" in dependencies:
+        raise SystemExit(f"{package} {' '.join(flags)} unexpectedly requires aws-lc-rs")
+

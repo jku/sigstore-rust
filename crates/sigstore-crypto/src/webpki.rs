@@ -4,12 +4,12 @@
 //! [`rustls_pki_types::SignatureVerificationAlgorithm`], allowing `rustls-webpki`
 //! to verify X.509 certificate chains without depending on `aws-lc-rs` directly.
 
+use crate::provider::default_provider;
 use crate::signing::SigningScheme;
-use crate::verification::VerificationKey;
+use crate::verification::validate_raw_public_key;
 use rustls_pki_types::{
     alg_id, AlgorithmIdentifier, InvalidSignature, SignatureVerificationAlgorithm,
 };
-use sigstore_types::SignatureBytes;
 
 #[derive(Debug)]
 struct WebpkiVerificationAlg {
@@ -33,8 +33,9 @@ impl SignatureVerificationAlgorithm for WebpkiVerificationAlg {
         message: &[u8],
         signature: &[u8],
     ) -> Result<(), InvalidSignature> {
-        let key = VerificationKey::from_raw_bytes(public_key.to_vec(), self.scheme);
-        key.verify(message, &SignatureBytes::from_bytes(signature))
+        validate_raw_public_key(self.scheme, public_key).map_err(|_| InvalidSignature)?;
+        default_provider()
+            .verify_raw(self.scheme, public_key, message, signature)
             .map_err(|_| InvalidSignature)
     }
 }
@@ -190,3 +191,74 @@ pub static WEBPKI_VERIFICATION_ALGS: &[&dyn SignatureVerificationAlgorithm] = &[
     ML_DSA_65,
     ML_DSA_87,
 ];
+
+#[cfg(all(test, feature = "aws-lc-rs"))]
+mod tests {
+    use super::*;
+    use crate::signing::KeyPair;
+    use sigstore_types::HashAlgorithm;
+
+    #[test]
+    fn webpki_algorithms_verify_and_reject_invalid_signatures() {
+        let msg = b"webpki tbsCertificate test payload";
+
+        // 1. ECDSA P-256
+        let kp = KeyPair::generate_ecdsa_p256().unwrap();
+        let sig = kp.sign(msg).unwrap();
+        assert!(ECDSA_P256_SHA256
+            .verify_signature(kp.public_key_bytes(), msg, sig.as_bytes())
+            .is_ok());
+        assert!(ECDSA_P256_SHA256
+            .verify_signature(kp.public_key_bytes(), b"wrong", sig.as_bytes())
+            .is_err());
+
+        // 2. ECDSA P-384
+        let (p384_pk, p384_sig) = crate::aws_lc::test_support::sign_p384_sha384(msg);
+        assert!(ECDSA_P384_SHA384
+            .verify_signature(&p384_pk, msg, p384_sig.as_bytes())
+            .is_ok());
+        assert!(ECDSA_P384_SHA256
+            .verify_signature(&p384_pk, msg, p384_sig.as_bytes())
+            .is_err());
+
+        // 3. Ed25519
+        let (ed_pk, ed_sig) = crate::aws_lc::test_support::sign_ed25519(msg);
+        assert!(ED25519
+            .verify_signature(&ed_pk, msg, ed_sig.as_bytes())
+            .is_ok());
+
+        // 4. RSA PKCS#1 (with and without NULL params) and RSA-PSS
+        let (rsa_pk, pkcs1_sig, pss_sig) =
+            crate::aws_lc::test_support::sign_rsa(msg, HashAlgorithm::Sha2256);
+        for alg in [
+            RSA_PKCS1_2048_8192_SHA256,
+            RSA_PKCS1_2048_8192_SHA256_ABSENT_PARAMS,
+        ] {
+            assert!(alg
+                .verify_signature(rsa_pk.as_bytes(), msg, pkcs1_sig.as_bytes())
+                .is_ok());
+            assert!(alg
+                .verify_signature(rsa_pk.as_bytes(), msg, pss_sig.as_bytes())
+                .is_err());
+        }
+        assert!(RSA_PSS_2048_8192_SHA256
+            .verify_signature(rsa_pk.as_bytes(), msg, pss_sig.as_bytes())
+            .is_ok());
+
+        // 5. ML-DSA-44/65/87
+        let seed = [0x33u8; 32];
+        for (scheme, alg) in [
+            (SigningScheme::MlDsa44, ML_DSA_44),
+            (SigningScheme::MlDsa65, ML_DSA_65),
+            (SigningScheme::MlDsa87, ML_DSA_87),
+        ] {
+            let (mldsa_pk, mldsa_sig) =
+                crate::aws_lc::test_support::sign_mldsa(scheme, &seed, msg);
+            assert!(alg
+                .verify_signature(&mldsa_pk, msg, mldsa_sig.as_bytes())
+                .is_ok());
+        }
+
+        assert_eq!(WEBPKI_VERIFICATION_ALGS.len(), 17);
+    }
+}
