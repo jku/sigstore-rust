@@ -129,18 +129,8 @@ pub(crate) fn verify_raw(
     data: &[u8],
     signature: &[u8],
 ) -> std::result::Result<(), ()> {
-    match scheme {
-        SigningScheme::EcdsaP256Sha256 | SigningScheme::EcdsaP384Sha256 => {
-            verify_prehashed(scheme, pubkey_bytes, &sha256(data), signature)
-        }
-        SigningScheme::EcdsaP256Sha384 | SigningScheme::EcdsaP384Sha384 => {
-            verify_prehashed(scheme, pubkey_bytes, &sha384(data), signature)
-        }
-        _ => {
-            let key = UnparsedPublicKey::new(verification_algorithm(scheme), pubkey_bytes);
-            key.verify(data, signature).map_err(|_| ())
-        }
-    }
+    let key = UnparsedPublicKey::new(verification_algorithm(scheme), pubkey_bytes);
+    key.verify(data, signature).map_err(|_| ())
 }
 
 pub(crate) fn verify_prehashed(
