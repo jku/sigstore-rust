@@ -166,7 +166,8 @@ pub(crate) mod test_support {
     use aws_lc_rs::{
         rsa::KeySize,
         signature::{
-            Ed25519KeyPair, RsaKeyPair, ECDSA_P384_SHA384_ASN1_SIGNING, RSA_PKCS1_SHA256,
+            Ed25519KeyPair, PqdsaKeyPair, RsaKeyPair, ECDSA_P384_SHA384_ASN1_SIGNING,
+            ML_DSA_44_SIGNING, ML_DSA_65_SIGNING, ML_DSA_87_SIGNING, RSA_PKCS1_SHA256,
             RSA_PKCS1_SHA384, RSA_PKCS1_SHA512, RSA_PSS_SHA256, RSA_PSS_SHA384, RSA_PSS_SHA512,
         },
     };
@@ -193,6 +194,24 @@ pub(crate) mod test_support {
         let kp = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
         let sig = SignatureBytes::new(kp.sign(data).as_ref().to_vec());
         (kp.public_key().as_ref().to_vec(), sig)
+    }
+
+    pub(crate) fn sign_mldsa(
+        scheme: SigningScheme,
+        seed: &[u8; 32],
+        data: &[u8],
+    ) -> (Vec<u8>, SignatureBytes) {
+        let alg = match scheme {
+            SigningScheme::MlDsa44 => &ML_DSA_44_SIGNING,
+            SigningScheme::MlDsa65 => &ML_DSA_65_SIGNING,
+            SigningScheme::MlDsa87 => &ML_DSA_87_SIGNING,
+            _ => panic!("unsupported ML-DSA signing scheme"),
+        };
+        let kp = PqdsaKeyPair::from_seed(alg, seed).unwrap();
+        let mut sig = vec![0u8; alg.signature_len()];
+        let sig_len = kp.sign(data, &mut sig).unwrap();
+        sig.truncate(sig_len);
+        (kp.public_key().as_ref().to_vec(), SignatureBytes::new(sig))
     }
 
     pub(crate) fn sign_rsa(

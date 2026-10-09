@@ -495,7 +495,7 @@ pub(crate) fn verify_emsa_pss(
 #[cfg(test)]
 pub(crate) mod test_support {
     use super::*;
-    use boring::{pkey::Id, sign::Signer};
+    use boring::{mldsa::MlDsaPrivateKey, pkey::Id, sign::Signer};
     use sigstore_types::{DerPublicKey, SignatureBytes};
 
     pub(crate) fn generate_p256_pkcs8() -> Vec<u8> {
@@ -530,6 +530,23 @@ pub(crate) mod test_support {
         (raw_pubkey, sig)
     }
 
+    pub(crate) fn sign_mldsa(
+        scheme: SigningScheme,
+        seed: &[u8; 32],
+        data: &[u8],
+    ) -> (Vec<u8>, SignatureBytes) {
+        let alg = match scheme {
+            SigningScheme::MlDsa44 => MlDsaAlgorithm::MlDsa44,
+            SigningScheme::MlDsa65 => MlDsaAlgorithm::MlDsa65,
+            SigningScheme::MlDsa87 => MlDsaAlgorithm::MlDsa87,
+            _ => panic!("unsupported ML-DSA signing scheme"),
+        };
+        let sk = MlDsaPrivateKey::from_seed(alg, seed).unwrap();
+        let pk = sk.public_key().unwrap().to_bytes().unwrap();
+        let sig = sk.sign(data).unwrap();
+        (pk, SignatureBytes::new(sig))
+    }
+
     pub(crate) fn sign_rsa(
         data: &[u8],
         hash_alg: HashAlgorithm,
@@ -553,5 +570,136 @@ pub(crate) mod test_support {
         let pss_sig = SignatureBytes::new(pss_signer.sign_to_vec().unwrap());
 
         (bare, pkcs1_sig, pss_sig)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_emsa_pkcs1_digest_info_accepts_valid_and_rejects_malformed() {
+        let digest256 = [0x42u8; 32];
+        let prefix_with_null: &[u8] = &[
+            0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+            0x01, 0x05, 0x00, 0x04, 0x20,
+        ];
+        let prefix_without_null: &[u8] = &[
+            0x30, 0x2f, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+            0x01, 0x04, 0x20,
+        ];
+
+        let mut di_null = prefix_with_null.to_vec();
+        di_null.extend_from_slice(&digest256);
+        assert!(
+            verify_emsa_pkcs1_digest_info(&di_null, HashAlgorithm::Sha2256, &digest256).is_ok()
+        );
+
+        let mut di_no_null = prefix_without_null.to_vec();
+        di_no_null.extend_from_slice(&digest256);
+        assert!(
+            verify_emsa_pkcs1_digest_info(&di_no_null, HashAlgorithm::Sha2256, &digest256).is_ok()
+        );
+
+        // Wrong HashAlgorithm rejected even if digest slice is 32 bytes or 48 bytes
+        assert!(
+            verify_emsa_pkcs1_digest_info(&di_null, HashAlgorithm::Sha2384, &digest256).is_err()
+        );
+        assert!(
+            verify_emsa_pkcs1_digest_info(&di_null, HashAlgorithm::Sha2384, &[0x42u8; 48]).is_err()
+        );
+
+        // Wrong digest length
+        assert!(
+            verify_emsa_pkcs1_digest_info(&di_null, HashAlgorithm::Sha2256, &[0x42u8; 31]).is_err()
+        );
+
+        // Trailing byte in DigestInfo
+        let mut di_trailing = di_null.clone();
+        di_trailing.push(0x00);
+        assert!(
+            verify_emsa_pkcs1_digest_info(&di_trailing, HashAlgorithm::Sha2256, &digest256)
+                .is_err()
+        );
+
+        // Corrupted OID byte in prefix
+        let mut di_bad_oid = di_null.clone();
+        di_bad_oid[14] ^= 0x01;
+        assert!(
+            verify_emsa_pkcs1_digest_info(&di_bad_oid, HashAlgorithm::Sha2256, &digest256).is_err()
+        );
+
+        // Corrupted digest byte in DigestInfo
+        let mut di_bad_digest = di_null;
+        *di_bad_digest.last_mut().unwrap() ^= 0x01;
+        assert!(
+            verify_emsa_pkcs1_digest_info(&di_bad_digest, HashAlgorithm::Sha2256, &digest256)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn verify_emsa_pss_boundary_and_negative_cases() {
+        let data = b"pss boundary test payload";
+        let digest = crate::hash::sha256(data);
+        let (bare, _pkcs1_sig, pss_sig) = test_support::sign_rsa(data, HashAlgorithm::Sha2256);
+        let rsa = parse_rsa_public_key(bare.as_bytes()).unwrap();
+        let mod_len = rsa.size() as usize;
+        let mod_bits = rsa.n().num_bits() as usize;
+        let md = MessageDigest::sha256();
+
+        let mut valid_em = vec![0u8; mod_len];
+        let len = rsa
+            .public_decrypt(pss_sig.as_bytes(), &mut valid_em, Padding::NONE)
+            .unwrap();
+        assert_eq!(len, mod_len);
+        assert!(verify_emsa_pss(&valid_em, mod_bits, md, digest.as_bytes()).is_ok());
+
+        // 1. mod_bits == 0 or em_len > mod_len
+        assert!(verify_emsa_pss(&valid_em, 0, md, digest.as_bytes()).is_err());
+        assert!(verify_emsa_pss(&valid_em, mod_bits + 16, md, digest.as_bytes()).is_err());
+
+        // 2. Wrong digest length
+        assert!(verify_emsa_pss(&valid_em, mod_bits, md, &[0u8; 31]).is_err());
+
+        // 3. Buffer too short for h_len + s_len + 2
+        assert!(verify_emsa_pss(&valid_em[..65], 65 * 8, md, digest.as_bytes()).is_err());
+
+        // 4. Invalid trailer byte (!= 0xbc)
+        let mut bad_trailer = valid_em.clone();
+        *bad_trailer.last_mut().unwrap() = 0xbd;
+        assert!(verify_emsa_pss(&bad_trailer, mod_bits, md, digest.as_bytes()).is_err());
+
+        // 5. Non-zero top bit in masked_db[0] (for 2048-bit key, em_bits = 2047, top bit must be 0)
+        let mut bad_top_bit = valid_em.clone();
+        bad_top_bit[0] |= 0x80;
+        assert!(verify_emsa_pss(&bad_top_bit, mod_bits, md, digest.as_bytes()).is_err());
+
+        // 6. Non-zero byte in zero padding PS (flip a bit in masked_db[10])
+        let mut bad_ps = valid_em.clone();
+        bad_ps[10] ^= 0x01;
+        assert!(verify_emsa_pss(&bad_ps, mod_bits, md, digest.as_bytes()).is_err());
+
+        // 7. Separator byte != 0x01 (flip a bit at zero_pad_len = mod_len - 32 - 32 - 2)
+        let zero_pad_len = mod_len - 32 - 32 - 2;
+        let mut bad_sep = valid_em.clone();
+        bad_sep[zero_pad_len] ^= 0x02;
+        assert!(verify_emsa_pss(&bad_sep, mod_bits, md, digest.as_bytes()).is_err());
+
+        // 8. Mismatched H' (wrong digest)
+        let mut wrong_digest = *digest.as_bytes();
+        wrong_digest[0] ^= 0x01;
+        assert!(verify_emsa_pss(&valid_em, mod_bits, md, &wrong_digest).is_err());
+
+        // 9. When mod_bits == 2041 (so em_bits = 2040, em_len = 255 < mod_len = 256),
+        // leading byte em_buf[0] must be 0x00.
+        let mut prefixed_em = vec![0x00];
+        prefixed_em.extend_from_slice(&valid_em);
+        // If leading byte is non-zero when em_len < mod_len, must reject:
+        prefixed_em[0] = 0x01;
+        assert!(verify_emsa_pss(&prefixed_em, mod_bits, md, digest.as_bytes()).is_err());
+        // If leading byte is zero, it slices to valid_em and succeeds:
+        prefixed_em[0] = 0x00;
+        assert!(verify_emsa_pss(&prefixed_em, mod_bits, md, digest.as_bytes()).is_ok());
     }
 }

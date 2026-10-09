@@ -477,4 +477,126 @@ mod tests {
             Err(Error::InvalidKey(_))
         ));
     }
+
+    #[test]
+    fn rsa_sha384_and_sha512_streaming_and_prehashed() {
+        let data = b"rsa sha384 and sha512 verification test message";
+        let digest256 = crate::hash::sha256(data);
+        let digest384 = crate::hash::sha384(data);
+        let digest512 = crate::hash::sha512(data);
+
+        let (bare384, pkcs1_384, pss_384) =
+            crate::backend::test_support::sign_rsa(data, HashAlgorithm::Sha2384);
+        let spki384 = spki_der(RSA_ENCRYPTION, None, bare384.as_bytes());
+
+        let vk_pkcs1_384 =
+            VerificationKey::from_spki_with_scheme(&spki384, SigningScheme::RsaPkcs1Sha384)
+                .unwrap();
+        assert!(vk_pkcs1_384.verify(data, &pkcs1_384).is_ok());
+        assert!(vk_pkcs1_384
+            .verify_prehashed(&digest384, &pkcs1_384)
+            .is_ok());
+        assert!(vk_pkcs1_384
+            .verify_prehashed(digest256.as_bytes(), &pkcs1_384)
+            .is_err());
+        assert!(vk_pkcs1_384.verify(data, &pss_384).is_err());
+
+        // Cross-hash check: SHA-384 PKCS#1 signature must be rejected under SHA-256 and SHA-512 schemes
+        let vk_pkcs1_256_on_384_key =
+            VerificationKey::from_spki_with_scheme(&spki384, SigningScheme::RsaPkcs1Sha256)
+                .unwrap();
+        assert!(vk_pkcs1_256_on_384_key.verify(data, &pkcs1_384).is_err());
+        assert!(vk_pkcs1_256_on_384_key
+            .verify_prehashed(digest256.as_bytes(), &pkcs1_384)
+            .is_err());
+
+        let vk_pss_384 =
+            VerificationKey::from_spki_with_scheme(&spki384, SigningScheme::RsaPssSha384).unwrap();
+        assert!(vk_pss_384.verify(data, &pss_384).is_ok());
+        assert!(vk_pss_384.verify_prehashed(&digest384, &pss_384).is_ok());
+        assert!(vk_pss_384
+            .verify_prehashed(digest256.as_bytes(), &pss_384)
+            .is_err());
+        assert!(vk_pss_384.verify(data, &pkcs1_384).is_err());
+
+        let (bare512, pkcs1_512, pss_512) =
+            crate::backend::test_support::sign_rsa(data, HashAlgorithm::Sha2512);
+        let spki512 = spki_der(RSA_ENCRYPTION, None, bare512.as_bytes());
+
+        let vk_pkcs1_512 =
+            VerificationKey::from_spki_with_scheme(&spki512, SigningScheme::RsaPkcs1Sha512)
+                .unwrap();
+        assert!(vk_pkcs1_512.verify(data, &pkcs1_512).is_ok());
+        assert!(vk_pkcs1_512
+            .verify_prehashed(digest512.as_bytes(), &pkcs1_512)
+            .is_ok());
+        assert!(vk_pkcs1_512
+            .verify_prehashed(&digest384, &pkcs1_512)
+            .is_err());
+
+        let vk_pss_512 =
+            VerificationKey::from_spki_with_scheme(&spki512, SigningScheme::RsaPssSha512).unwrap();
+        assert!(vk_pss_512.verify(data, &pss_512).is_ok());
+        assert!(vk_pss_512
+            .verify_prehashed(digest512.as_bytes(), &pss_512)
+            .is_ok());
+        assert!(vk_pss_512.verify_prehashed(&digest384, &pss_512).is_err());
+    }
+
+    #[test]
+    fn mldsa_44_65_87_verify_and_cross_scheme_rejection() {
+        let seed = [0x5au8; 32];
+        let data = b"ml-dsa post-quantum verification test message";
+
+        for (oid, scheme, other_scheme) in [
+            (ID_ML_DSA_44, SigningScheme::MlDsa44, SigningScheme::MlDsa65),
+            (ID_ML_DSA_65, SigningScheme::MlDsa65, SigningScheme::MlDsa87),
+            (ID_ML_DSA_87, SigningScheme::MlDsa87, SigningScheme::MlDsa44),
+        ] {
+            let (raw_pk, sig) = crate::backend::test_support::sign_mldsa(scheme, &seed, data);
+            let spki = spki_der(oid, None, &raw_pk);
+
+            let vk = VerificationKey::from_spki(&spki).unwrap();
+            assert_eq!(vk.scheme(), scheme);
+            assert!(vk.verify(data, &sig).is_ok());
+            assert!(vk.verify(b"wrong message", &sig).is_err());
+
+            let mut bad_sig_bytes = sig.as_bytes().to_vec();
+            bad_sig_bytes[0] ^= 0x01;
+            let bad_sig = SignatureBytes::new(bad_sig_bytes);
+            assert!(vk.verify(data, &bad_sig).is_err());
+
+            // ML-DSA is pure (not prehashed) in sigstore-crypto
+            let digest = crate::hash::sha256(data);
+            assert!(matches!(
+                vk.verify_prehashed(digest.as_bytes(), &sig),
+                Err(Error::UnsupportedAlgorithm(_))
+            ));
+
+            // Cross-scheme rejection
+            assert!(VerificationKey::from_spki_with_scheme(&spki, other_scheme).is_err());
+        }
+    }
+
+    #[test]
+    fn ed25519_rfc8032_static_test_vector() {
+        // RFC 8032 §7.1 TEST 2 (1-byte message 0x72)
+        let raw_pk: [u8; 32] = [
+            0x3d, 0x40, 0x17, 0xc3, 0xe8, 0x43, 0x89, 0x5a, 0x92, 0xb7, 0x0a, 0xa7, 0x4d, 0x1b,
+            0x7e, 0xbc, 0x9c, 0x98, 0x2c, 0xcf, 0x2e, 0xc4, 0x96, 0x8c, 0xc0, 0xcd, 0x55, 0xf1,
+            0x2a, 0xf4, 0x66, 0x0c,
+        ];
+        let sig_bytes: [u8; 64] = [
+            0x92, 0xa0, 0x09, 0xa9, 0xf0, 0xd4, 0xca, 0xb8, 0x72, 0x0e, 0x82, 0x0b, 0x5f, 0x64,
+            0x25, 0x40, 0xa2, 0xb2, 0x7b, 0x54, 0x16, 0x50, 0x3f, 0x8f, 0xb3, 0x76, 0x22, 0x23,
+            0xeb, 0xdb, 0x69, 0xda, 0x08, 0x5a, 0xc1, 0xe4, 0x3e, 0x15, 0x99, 0x6e, 0x45, 0x8f,
+            0x36, 0x13, 0xd0, 0xf1, 0x1d, 0x8c, 0x38, 0x7b, 0x2e, 0xae, 0xb4, 0x30, 0x2a, 0xee,
+            0xb0, 0x0d, 0x29, 0x16, 0x12, 0xbb, 0x0c, 0x00,
+        ];
+        let spki = spki_der(ID_ED25519, None, &raw_pk);
+        let vk = VerificationKey::from_spki(&spki).unwrap();
+        let sig = SignatureBytes::new(sig_bytes.to_vec());
+        assert!(vk.verify([0x72], &sig).is_ok());
+        assert!(vk.verify([0x73], &sig).is_err());
+    }
 }

@@ -390,6 +390,15 @@ mod tests {
         assert_eq!(key.algorithm(), KeyAlgorithm::EcdsaP256);
         assert_eq!(key.default_scheme(), SigningScheme::EcdsaP256Sha256);
         assert_eq!(format!("{key:?}"), "KeyPair { algorithm: EcdsaP256, .. }");
+
+        // Trailing bytes after the PKCS#8 DER element must be rejected.
+        let mut with_trailing = pkcs8;
+        with_trailing.push(0x00);
+        assert!(matches!(
+            KeyPair::from_pkcs8_der(&with_trailing),
+            Err(Error::InvalidKeyFormat(_))
+        ));
+
         assert!(KeyPair::from_pkcs8_der(b"not a key").is_err());
         assert!(matches!(
             KeyPair::generate(KeyAlgorithm::Ed25519),
