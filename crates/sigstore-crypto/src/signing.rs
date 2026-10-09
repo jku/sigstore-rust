@@ -3,7 +3,8 @@
 use crate::error::{Error, Result};
 use crate::hash::Sha256Hasher;
 use crate::provider::{default_provider, SigningKeyPair};
-use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, SECP_256_R_1};
+use crate::verification::{ID_ED25519, ID_ML_DSA_44, ID_ML_DSA_65, ID_ML_DSA_87};
+use const_oid::db::rfc5912::{ID_EC_PUBLIC_KEY, RSA_ENCRYPTION, SECP_256_R_1, SECP_384_R_1};
 use der::{asn1::BitString, Encode as _};
 use sigstore_types::{DerPublicKey, HashAlgorithm, Sha256Hash, SignatureBytes};
 use spki::{AlgorithmIdentifier, SubjectPublicKeyInfo};
@@ -273,30 +274,94 @@ impl KeyPair {
     /// Returns the public key in DER-encoded SubjectPublicKeyInfo format.
     /// Use `.to_pem()` on the result if you need PEM format.
     pub fn public_key_der(&self) -> Result<DerPublicKey> {
-        match self.algorithm() {
-            KeyAlgorithm::EcdsaP256 => {
-                let alg_id = AlgorithmIdentifier {
-                    oid: ID_EC_PUBLIC_KEY,
-                    parameters: Some(
-                        der::Any::encode_from(&SECP_256_R_1)
-                            .map_err(|e| Error::Der(e.to_string()))?,
-                    ),
-                };
+        let algorithm = match self.algorithm() {
+            KeyAlgorithm::EcdsaP256 => AlgorithmIdentifier {
+                oid: ID_EC_PUBLIC_KEY,
+                parameters: Some(
+                    der::Any::encode_from(&SECP_256_R_1).map_err(|e| Error::Der(e.to_string()))?,
+                ),
+            },
+            KeyAlgorithm::EcdsaP384 => AlgorithmIdentifier {
+                oid: ID_EC_PUBLIC_KEY,
+                parameters: Some(
+                    der::Any::encode_from(&SECP_384_R_1).map_err(|e| Error::Der(e.to_string()))?,
+                ),
+            },
+            KeyAlgorithm::Rsa => AlgorithmIdentifier {
+                oid: RSA_ENCRYPTION,
+                parameters: Some(der::Any::null()),
+            },
+            KeyAlgorithm::Ed25519 => AlgorithmIdentifier {
+                oid: ID_ED25519,
+                parameters: None,
+            },
+            KeyAlgorithm::MlDsa44 => AlgorithmIdentifier {
+                oid: ID_ML_DSA_44,
+                parameters: None,
+            },
+            KeyAlgorithm::MlDsa65 => AlgorithmIdentifier {
+                oid: ID_ML_DSA_65,
+                parameters: None,
+            },
+            KeyAlgorithm::MlDsa87 => AlgorithmIdentifier {
+                oid: ID_ML_DSA_87,
+                parameters: None,
+            },
+        };
 
-                let pub_key_bytes = self.public_key_bytes();
+        let spki = SubjectPublicKeyInfo {
+            algorithm,
+            subject_public_key: BitString::from_bytes(self.public_key_bytes())
+                .map_err(|e| Error::Der(e.to_string()))?,
+        };
 
-                let spki = SubjectPublicKeyInfo {
-                    algorithm: alg_id,
-                    subject_public_key: BitString::from_bytes(pub_key_bytes)
-                        .map_err(|e| Error::Der(e.to_string()))?,
-                };
+        let der_bytes = spki.to_der().map_err(|e| Error::Der(e.to_string()))?;
+        Ok(DerPublicKey::new(der_bytes))
+    }
+}
 
-                let der_bytes = spki.to_der().map_err(|e| Error::Der(e.to_string()))?;
-                Ok(DerPublicKey::new(der_bytes))
-            }
-            other => Err(Error::UnsupportedAlgorithm(format!(
-                "SPKI encoding is not supported for {other:?}"
-            ))),
+#[cfg(test)]
+mod spki_tests {
+    use super::*;
+
+    struct DummySigningKeyPair {
+        algorithm: KeyAlgorithm,
+        pubkey: Vec<u8>,
+    }
+
+    impl SigningKeyPair for DummySigningKeyPair {
+        fn algorithm(&self) -> KeyAlgorithm {
+            self.algorithm
+        }
+
+        fn public_key_bytes(&self) -> &[u8] {
+            &self.pubkey
+        }
+
+        fn sign_raw(&self, _data: &[u8]) -> Result<Vec<u8>> {
+            Ok(vec![])
+        }
+
+        fn sign_prehashed(&self, _digest: &[u8]) -> Result<Vec<u8>> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn public_key_der_round_trips_all_key_algorithms() {
+        let rsa_der = vec![0x30, 0x06, 0x02, 0x01, 0x03, 0x02, 0x01, 0x03];
+        for (algorithm, pubkey) in [
+            (KeyAlgorithm::EcdsaP256, vec![0x04; 65]),
+            (KeyAlgorithm::EcdsaP384, vec![0x04; 97]),
+            (KeyAlgorithm::Rsa, rsa_der),
+            (KeyAlgorithm::Ed25519, vec![0x11; 32]),
+            (KeyAlgorithm::MlDsa44, vec![0x22; 1312]),
+            (KeyAlgorithm::MlDsa65, vec![0x33; 1952]),
+            (KeyAlgorithm::MlDsa87, vec![0x44; 2592]),
+        ] {
+            let kp = KeyPair(Box::new(DummySigningKeyPair { algorithm, pubkey }));
+            let spki = kp.public_key_der().unwrap();
+            assert_eq!(KeyAlgorithm::from_spki(&spki).unwrap(), algorithm);
         }
     }
 }

@@ -31,9 +31,9 @@ use const_oid::{
 };
 use sigstore_crypto::{
     compute_key_hint, default_provider, install_default_provider, sha256, sha256_reader, sha384,
-    sha512, try_default_provider, validate_raw_public_key, ArtifactHasher, Checkpoint,
-    CheckpointVerifyExt, CryptoProvider, Error, HashContext, KeyAlgorithm, KeyPair, Keyring,
-    Result, Sha256Hasher, SigningKeyPair, SigningScheme, VerificationKey, WEBPKI_VERIFICATION_ALGS,
+    sha512, try_default_provider, ArtifactHasher, Checkpoint, CheckpointVerifyExt, CryptoProvider,
+    Error, HashContext, KeyAlgorithm, KeyPair, Keyring, Result, Sha256Hasher, SigningKeyPair,
+    SigningScheme, VerificationKey, WEBPKI_VERIFICATION_ALGS,
 };
 use sigstore_types::{DerPublicKey, HashAlgorithm, SignatureBytes};
 
@@ -154,10 +154,11 @@ impl CryptoProvider for BoringProvider {
         result
     }
 
-    fn sha384(&self, data: &[u8]) -> Vec<u8> {
-        hash(MessageDigest::sha384(), data)
-            .expect("SHA-384 hashing failed")
-            .to_vec()
+    fn sha384(&self, data: &[u8]) -> [u8; 48] {
+        let digest = hash(MessageDigest::sha384(), data).expect("SHA-384 hashing failed");
+        let mut result = [0u8; 48];
+        result.copy_from_slice(&digest);
+        result
     }
 
     fn sha512(&self, data: &[u8]) -> [u8; 64] {
@@ -174,8 +175,6 @@ impl CryptoProvider for BoringProvider {
         data: &[u8],
         signature: &[u8],
     ) -> Result<()> {
-        validate_raw_public_key(scheme, spki_pubkey_bytes)
-            .map_err(|_| Error::Verification(format!("{} signature invalid", scheme.name())))?;
         let res = match scheme {
             SigningScheme::EcdsaP256Sha256 | SigningScheme::EcdsaP384Sha256 => self
                 .verify_prehashed(scheme, spki_pubkey_bytes, &self.sha256(data), signature)
@@ -253,8 +252,6 @@ impl CryptoProvider for BoringProvider {
         digest: &[u8],
         signature: &[u8],
     ) -> Result<()> {
-        validate_raw_public_key(scheme, spki_pubkey_bytes)
-            .map_err(|_| Error::Verification(format!("{} signature invalid", scheme.name())))?;
         let hash_alg = scheme.hash_algorithm().ok_or_else(|| {
             Error::UnsupportedAlgorithm(format!(
                 "Scheme {scheme:?} does not support prehashed mode"
@@ -305,9 +302,6 @@ fn verify_ecdsa_digest(
     digest: &[u8],
     signature: &[u8],
 ) -> std::result::Result<(), ()> {
-    if pubkey_bytes.first() != Some(&0x04) {
-        return Err(());
-    }
     let group = EcGroup::from_curve_name(curve).map_err(|_| ())?;
     let mut ctx = BigNumContext::new().map_err(|_| ())?;
     let point = EcPoint::from_bytes(&group, pubkey_bytes, &mut ctx).map_err(|_| ())?;
@@ -352,13 +346,7 @@ fn verify_ed25519(
 }
 
 fn parse_rsa_public_key(pubkey_bytes: &[u8]) -> std::result::Result<Rsa<Public>, ()> {
-    validate_raw_public_key(SigningScheme::RsaPkcs1Sha256, pubkey_bytes).map_err(|_| ())?;
-    let rsa = Rsa::public_key_from_der_pkcs1(pubkey_bytes).map_err(|_| ())?;
-    let bits = rsa.n().num_bits();
-    if !(2048..=8192).contains(&bits) {
-        return Err(());
-    }
-    Ok(rsa)
+    Rsa::public_key_from_der_pkcs1(pubkey_bytes).map_err(|_| ())
 }
 
 fn verify_rsa(
@@ -390,11 +378,16 @@ fn verify_rsa(
 
 /// Prehashed RSA PKCS#1 v1.5 verification.
 ///
+/// SECURITY NOTE: Production `CryptoProvider` implementations should prefer
+/// their cryptographic library's native one-shot digest verification API
+/// (e.g. `EVP_PKEY_verify` / `openssl::pkey_ctx::PkeyCtx::verify` / `RSA_verify`)
+/// rather than `Rsa::public_decrypt` + manual padding verification.
+///
 /// The safe `boring` crate (v5) only wraps streaming `EVP_DigestVerify*`
 /// (`boring::sign::Verifier`) and does not expose a safe wrapper around
 /// `EVP_PKEY_verify` or `RSA_verify` for precomputed digests. To keep this
-/// implementation free of `unsafe` FFI and `boring-sys` dependencies, we use
-/// BoringSSL's `Rsa::public_decrypt(..., Padding::PKCS1)` and verify the
+/// test implementation free of `unsafe` FFI and `boring-sys` dependencies, we
+/// use BoringSSL's `Rsa::public_decrypt(..., Padding::PKCS1)` and verify the
 /// RFC 8017 §9.2 `DigestInfo` encoding in [`verify_emsa_pkcs1_digest_info`].
 fn verify_rsa_pkcs1_prehashed(
     pubkey_bytes: &[u8],
@@ -478,11 +471,16 @@ fn verify_emsa_pkcs1_digest_info(
 
 /// Prehashed RSA-PSS verification.
 ///
+/// SECURITY NOTE: Production `CryptoProvider` implementations should prefer
+/// their cryptographic library's native one-shot digest verification API
+/// (e.g. `EVP_PKEY_verify` / `openssl::pkey_ctx::PkeyCtx::verify` / `RSA_verify_pss_mgf1`)
+/// rather than `Rsa::public_decrypt` + manual EMSA-PSS verification.
+///
 /// The safe `boring` crate (v5) only wraps streaming `EVP_DigestVerify*`
 /// (`boring::sign::Verifier`) and does not expose a safe wrapper around
 /// `EVP_PKEY_verify` or `RSA_verify_pss_mgf1` for precomputed digests. To keep
-/// this implementation free of `unsafe` FFI and `boring-sys` dependencies, we
-/// recover the encoded message via BoringSSL's `Rsa::public_decrypt(..., Padding::NONE)`
+/// this test implementation free of `unsafe` FFI and `boring-sys` dependencies,
+/// we recover the encoded message via BoringSSL's `Rsa::public_decrypt(..., Padding::NONE)`
 /// and verify RFC 8017 §9.1.2 `EMSA-PSS-VERIFY` in [`verify_emsa_pss`].
 fn verify_rsa_pss_prehashed(
     pubkey_bytes: &[u8],

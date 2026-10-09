@@ -3,7 +3,6 @@
 use crate::error::{Error, Result};
 use crate::provider::{CryptoProvider, HashContext, SigningKeyPair};
 use crate::signing::{KeyAlgorithm, SigningScheme};
-use crate::verification::validate_raw_public_key;
 use aws_lc_rs::{
     digest::{self, Context, Digest, SHA256, SHA384, SHA512},
     rand::SystemRandom,
@@ -114,8 +113,11 @@ impl CryptoProvider for AwsLcProvider {
         result
     }
 
-    fn sha384(&self, data: &[u8]) -> Vec<u8> {
-        digest::digest(&SHA384, data).as_ref().to_vec()
+    fn sha384(&self, data: &[u8]) -> [u8; 48] {
+        let digest = digest::digest(&SHA384, data);
+        let mut result = [0u8; 48];
+        result.copy_from_slice(digest.as_ref());
+        result
     }
 
     fn sha512(&self, data: &[u8]) -> [u8; 64] {
@@ -132,8 +134,6 @@ impl CryptoProvider for AwsLcProvider {
         data: &[u8],
         signature: &[u8],
     ) -> Result<()> {
-        validate_raw_public_key(scheme, spki_pubkey_bytes)
-            .map_err(|_| Error::Verification(format!("{} signature invalid", scheme.name())))?;
         let key = UnparsedPublicKey::new(verification_algorithm(scheme), spki_pubkey_bytes);
         key.verify(data, signature)
             .map_err(|_| Error::Verification(format!("{} signature invalid", scheme.name())))
@@ -146,8 +146,6 @@ impl CryptoProvider for AwsLcProvider {
         digest: &[u8],
         signature: &[u8],
     ) -> Result<()> {
-        validate_raw_public_key(scheme, spki_pubkey_bytes)
-            .map_err(|_| Error::Verification(format!("{} signature invalid", scheme.name())))?;
         let aws_algo = match scheme.hash_algorithm() {
             Some(HashAlgorithm::Sha2256) => &SHA256,
             Some(HashAlgorithm::Sha2384) => &SHA384,

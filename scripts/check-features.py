@@ -40,9 +40,16 @@ for package, flags in [
 for package, flags in [
     ("sigstore-crypto", ["--no-default-features"]),
     ("sigstore-verify", ["--no-default-features"]),
+    ("sigstore-verify", ["--no-default-features", "--features", "tuf,rustls-no-provider"]),
+    ("sigstore-sign", ["--no-default-features", "--features", "tuf,rustls-no-provider"]),
     ("sigstore-trust-root", ["--no-default-features"]),
+    ("sigstore-tuf", ["--no-default-features", "--features", "rustls-no-provider"]),
     ("sigstore-rekor", ["--no-default-features"]),
+    ("sigstore-rekor", ["--no-default-features", "--features", "rustls-no-provider"]),
+    ("sigstore-fulcio", ["--no-default-features", "--features", "rustls-no-provider"]),
+    ("sigstore-oidc", ["--no-default-features", "--features", "rustls-no-provider"]),
     ("sigstore-tsa", ["--no-default-features"]),
+    ("sigstore-tsa", ["--no-default-features", "--features", "rustls-no-provider"]),
 ]:
     tree = subprocess.check_output(
         ["cargo", "tree", "--locked", "--package", package,

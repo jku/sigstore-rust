@@ -10,13 +10,16 @@ use sigstore_types::{DerPublicKey, HashAlgorithm, SignatureBytes};
 use spki::SubjectPublicKeyInfoRef;
 
 /// id-Ed25519: 1.3.101.112 (RFC 8410)
-const ID_ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
+pub(crate) const ID_ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
 /// id-ml-dsa-44: 2.16.840.1.101.3.4.3.17 (FIPS 204)
-const ID_ML_DSA_44: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.17");
+pub(crate) const ID_ML_DSA_44: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.17");
 /// id-ml-dsa-65: 2.16.840.1.101.3.4.3.18 (FIPS 204)
-const ID_ML_DSA_65: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18");
+pub(crate) const ID_ML_DSA_65: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.18");
 /// id-ml-dsa-87: 2.16.840.1.101.3.4.3.19 (FIPS 204)
-const ID_ML_DSA_87: ObjectIdentifier = ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.19");
+pub(crate) const ID_ML_DSA_87: ObjectIdentifier =
+    ObjectIdentifier::new_unwrap("2.16.840.1.101.3.4.3.19");
 
 impl KeyAlgorithm {
     /// Resolve an SPKI algorithm with checked ASN.1 parameters.
@@ -86,10 +89,11 @@ struct RsaPublicKey<'a> {
 /// Validate raw `subjectPublicKey` bit-string bytes for `scheme` before passing
 /// them to a [`CryptoProvider`](crate::CryptoProvider).
 ///
-/// Checks that:
-/// - ECDSA P-256 and P-384 public keys use uncompressed SEC1 point encoding (`0x04` prefix).
-/// - RSA public keys are valid DER-encoded PKCS#1 `RSAPublicKey` structures with no trailing bytes.
-/// - Ed25519 public keys are 32 bytes.
+/// Enforces key-format invariants that some cryptographic backends do not check
+/// by default:
+/// - ECDSA P-256 and P-384 public keys must use uncompressed SEC1 point encoding (`0x04` prefix).
+/// - RSA public keys must be valid DER-encoded PKCS#1 `RSAPublicKey` structures with no trailing
+///   bytes and a 2048–8192 bit modulus.
 pub fn validate_raw_public_key(scheme: SigningScheme, spki_pubkey_bytes: &[u8]) -> Result<()> {
     match scheme.key_algorithm() {
         KeyAlgorithm::EcdsaP256 | KeyAlgorithm::EcdsaP384 => {
@@ -101,19 +105,24 @@ pub fn validate_raw_public_key(scheme: SigningScheme, spki_pubkey_bytes: &[u8]) 
             Ok(())
         }
         KeyAlgorithm::Rsa => {
-            RsaPublicKey::from_der(spki_pubkey_bytes)
+            let rsa = RsaPublicKey::from_der(spki_pubkey_bytes)
                 .map_err(|e| Error::InvalidKey(format!("invalid RSA public key: {e}")))?;
-            Ok(())
-        }
-        KeyAlgorithm::Ed25519 => {
-            if spki_pubkey_bytes.len() != 32 {
-                return Err(Error::InvalidKey(
-                    "Ed25519 public key must be 32 bytes".into(),
-                ));
+            let mod_bytes = rsa.modulus.as_bytes();
+            let bits = match mod_bytes.first() {
+                Some(&first) => (mod_bytes.len() - 1) * 8 + (8 - first.leading_zeros() as usize),
+                None => 0,
+            };
+            if !(2048..=8192).contains(&bits) {
+                return Err(Error::InvalidKey(format!(
+                    "RSA key size {bits} bits is outside the supported 2048..=8192 bit range"
+                )));
             }
             Ok(())
         }
-        KeyAlgorithm::MlDsa44 | KeyAlgorithm::MlDsa65 | KeyAlgorithm::MlDsa87 => Ok(()),
+        KeyAlgorithm::Ed25519
+        | KeyAlgorithm::MlDsa44
+        | KeyAlgorithm::MlDsa65
+        | KeyAlgorithm::MlDsa87 => Ok(()),
     }
 }
 
@@ -376,6 +385,47 @@ mod tests {
             VerificationKey::from_spki(&key),
             Err(Error::InvalidKey(_))
         ));
+    }
+
+    #[test]
+    fn test_validate_raw_public_key_enforces_uncompressed_ec_and_rsa_bits() {
+        use der::Encode as _;
+
+        // ECDSA: uncompressed SEC1 point prefix (0x04) required
+        let mut p256 = [0u8; 65];
+        p256[0] = 0x04;
+        assert!(validate_raw_public_key(SigningScheme::EcdsaP256Sha256, &p256).is_ok());
+        p256[0] = 0x02;
+        assert!(validate_raw_public_key(SigningScheme::EcdsaP256Sha256, &p256).is_err());
+
+        // RSA: 1024-bit and 2047-bit moduli must be rejected, 2048-bit modulus accepted
+        let make_rsa_der = |mod_bytes: &[u8]| {
+            let rsa = RsaPublicKey {
+                modulus: der::asn1::UintRef::new(mod_bytes).unwrap(),
+                public_exponent: der::asn1::UintRef::new(&[0x01, 0x00, 0x01]).unwrap(),
+            };
+            rsa.to_der().unwrap()
+        };
+        let mut mod_1024 = [0u8; 128];
+        mod_1024[0] = 0x80;
+        assert!(
+            validate_raw_public_key(SigningScheme::RsaPkcs1Sha256, &make_rsa_der(&mod_1024))
+                .is_err()
+        );
+
+        let mut mod_2047 = [0u8; 256];
+        mod_2047[0] = 0x40;
+        assert!(
+            validate_raw_public_key(SigningScheme::RsaPkcs1Sha256, &make_rsa_der(&mod_2047))
+                .is_err()
+        );
+
+        let mut mod_2048 = [0u8; 256];
+        mod_2048[0] = 0x80;
+        assert!(
+            validate_raw_public_key(SigningScheme::RsaPkcs1Sha256, &make_rsa_der(&mod_2048))
+                .is_ok()
+        );
     }
 
     #[cfg(feature = "aws-lc-rs")]

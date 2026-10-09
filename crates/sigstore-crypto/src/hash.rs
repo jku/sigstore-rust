@@ -18,7 +18,7 @@ pub fn sha256(data: &[u8]) -> Sha256Hash {
 }
 
 /// Hash data using SHA-384, returning raw bytes
-pub fn sha384(data: &[u8]) -> Vec<u8> {
+pub fn sha384(data: &[u8]) -> [u8; 48] {
     default_provider().sha384(data)
 }
 

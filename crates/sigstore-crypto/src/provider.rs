@@ -63,12 +63,14 @@ pub trait CryptoProvider: Send + Sync + std::fmt::Debug + 'static {
     /// Compute a one-shot SHA-384 digest.
     ///
     /// Providers may override this to avoid boxing a [`HashContext`].
-    fn sha384(&self, data: &[u8]) -> Vec<u8> {
+    fn sha384(&self, data: &[u8]) -> [u8; 48] {
         let mut ctx = self
             .hash(HashAlgorithm::Sha2384)
             .expect("CryptoProvider must support SHA-384");
         ctx.update(data);
         ctx.finalize()
+            .try_into()
+            .expect("CryptoProvider SHA-384 digest must be 48 bytes")
     }
 
     /// Compute a one-shot SHA-512 digest.
@@ -86,12 +88,16 @@ pub trait CryptoProvider: Send + Sync + std::fmt::Debug + 'static {
 
     /// Verify a signature over raw message `data`.
     ///
-    /// `spki_pubkey_bytes` contains the raw `subjectPublicKey` bit-string bytes
-    /// extracted from the X.509 certificate or SPKI key:
-    /// - Uncompressed SEC1 point (`0x04 || X || Y`) for ECDSA P-256 and P-384
+    /// When called via [`VerificationKey`](crate::VerificationKey) or
+    /// [`WEBPKI_VERIFICATION_ALGS`](crate::WEBPKI_VERIFICATION_ALGS),
+    /// `spki_pubkey_bytes` has already been validated by
+    /// [`validate_raw_public_key`](crate::validate_raw_public_key) and contains
+    /// the raw `subjectPublicKey` bit-string bytes extracted from the X.509
+    /// certificate or SPKI key:
+    /// - 65-byte or 97-byte uncompressed SEC1 point (`0x04 || X || Y`) for ECDSA P-256 and P-384
     /// - 32-byte raw public key for Ed25519
-    /// - PKCS#1 `RSAPublicKey` DER (`SEQUENCE { modulus, publicExponent }`) for RSA
-    /// - Raw FIPS 204 public key bytes for ML-DSA-44, ML-DSA-65, and ML-DSA-87
+    /// - PKCS#1 `RSAPublicKey` DER (`SEQUENCE { modulus, publicExponent }`, 2048–8192 bits) for RSA
+    /// - Raw FIPS 204 public key bytes for ML-DSA-44 (1312B), ML-DSA-65 (1952B), and ML-DSA-87 (2592B)
     fn verify_raw(
         &self,
         scheme: SigningScheme,
@@ -102,9 +108,11 @@ pub trait CryptoProvider: Send + Sync + std::fmt::Debug + 'static {
 
     /// Verify a signature over a precomputed `digest`.
     ///
-    /// Only schemes where [`SigningScheme::supports_prehashed`] is `true` (ECDSA and RSA)
-    /// are passed to this method, and `digest` is guaranteed to match the byte length of
-    /// [`SigningScheme::hash_algorithm`] when called via [`VerificationKey::verify_prehashed`](crate::VerificationKey::verify_prehashed).
+    /// When called via [`VerificationKey::verify_prehashed`](crate::VerificationKey::verify_prehashed),
+    /// only schemes where [`SigningScheme::supports_prehashed`] is `true` (ECDSA and RSA)
+    /// are passed to this method, `spki_pubkey_bytes` has been validated by
+    /// [`validate_raw_public_key`](crate::validate_raw_public_key), and `digest` is
+    /// guaranteed to match the byte length of [`SigningScheme::hash_algorithm`].
     fn verify_prehashed(
         &self,
         scheme: SigningScheme,
