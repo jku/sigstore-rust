@@ -1,10 +1,7 @@
 //! Hashing utilities
 
-use crate::error::{Error, Result};
-#[cfg(feature = "aws-lc-rs")]
-use aws_lc_rs::digest::{self, Context, SHA256, SHA384, SHA512};
-#[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-use boring::hash::{hash, Hasher, MessageDigest};
+use crate::backend::DigestContext;
+use crate::error::Result;
 use futures_io::AsyncRead;
 use sigstore_types::{ArtifactDigest, HashAlgorithm, Sha256Hash, Sha512Hash};
 use std::future::Future;
@@ -17,62 +14,23 @@ const HASH_CHUNK_SIZE: usize = 64 * 1024;
 
 /// Hash data using SHA-256, returning a typed hash
 pub fn sha256(data: &[u8]) -> Sha256Hash {
-    #[cfg(feature = "aws-lc-rs")]
-    {
-        let digest = digest::digest(&SHA256, data);
-        let mut result = [0u8; 32];
-        result.copy_from_slice(digest.as_ref());
-        Sha256Hash::new(result)
-    }
-    #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-    {
-        let digest = hash(MessageDigest::sha256(), data).expect("SHA-256 hashing failed");
-        let mut result = [0u8; 32];
-        result.copy_from_slice(&digest);
-        Sha256Hash::new(result)
-    }
+    Sha256Hash::new(crate::backend::sha256(data))
 }
 
 /// Hash data using SHA-384, returning raw bytes
 pub fn sha384(data: &[u8]) -> Vec<u8> {
-    #[cfg(feature = "aws-lc-rs")]
-    {
-        let digest = digest::digest(&SHA384, data);
-        digest.as_ref().to_vec()
-    }
-    #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-    {
-        hash(MessageDigest::sha384(), data)
-            .expect("SHA-384 hashing failed")
-            .to_vec()
-    }
+    crate::backend::sha384(data)
 }
 
 /// Hash data using SHA-512, returning a typed hash
 pub fn sha512(data: &[u8]) -> Sha512Hash {
-    #[cfg(feature = "aws-lc-rs")]
-    {
-        let digest = digest::digest(&SHA512, data);
-        let mut result = [0u8; 64];
-        result.copy_from_slice(digest.as_ref());
-        Sha512Hash::new(result)
-    }
-    #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-    {
-        let digest = hash(MessageDigest::sha512(), data).expect("SHA-512 hashing failed");
-        let mut result = [0u8; 64];
-        result.copy_from_slice(&digest);
-        Sha512Hash::new(result)
-    }
+    Sha512Hash::new(crate::backend::sha512(data))
 }
 
 /// Incremental hasher for a typed artifact digest.
 pub struct ArtifactHasher {
     algorithm: HashAlgorithm,
-    #[cfg(feature = "aws-lc-rs")]
-    context: Context,
-    #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-    context: Hasher,
+    context: DigestContext,
 }
 
 impl ArtifactHasher {
@@ -80,57 +38,21 @@ impl ArtifactHasher {
     ///
     /// Fails for algorithms this version of the crate cannot compute.
     pub fn new(algorithm: HashAlgorithm) -> Result<Self> {
-        #[cfg(feature = "aws-lc-rs")]
-        {
-            let backend = match algorithm {
-                HashAlgorithm::Sha2256 => &SHA256,
-                HashAlgorithm::Sha2384 => &SHA384,
-                HashAlgorithm::Sha2512 => &SHA512,
-                _ => {
-                    return Err(Error::UnsupportedAlgorithm(format!(
-                        "cannot compute {algorithm} digests"
-                    )))
-                }
-            };
-            Ok(Self {
-                algorithm,
-                context: Context::new(backend),
-            })
-        }
-        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-        {
-            let md = match algorithm {
-                HashAlgorithm::Sha2256 => MessageDigest::sha256(),
-                HashAlgorithm::Sha2384 => MessageDigest::sha384(),
-                HashAlgorithm::Sha2512 => MessageDigest::sha512(),
-                _ => {
-                    return Err(Error::UnsupportedAlgorithm(format!(
-                        "cannot compute {algorithm} digests"
-                    )))
-                }
-            };
-            let context =
-                Hasher::new(md).map_err(|e| Error::UnsupportedAlgorithm(e.to_string()))?;
-            Ok(Self { algorithm, context })
-        }
+        Ok(Self {
+            algorithm,
+            context: DigestContext::new(algorithm)?,
+        })
     }
 
     /// Feed more artifact bytes.
     pub fn update(&mut self, data: &[u8]) {
-        #[cfg(feature = "aws-lc-rs")]
         self.context.update(data);
-        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-        self.context.update(data).expect("hasher update failed");
     }
 
     /// Finish hashing and return the digest.
-    #[allow(unused_mut)]
-    pub fn finalize(mut self) -> ArtifactDigest {
-        #[cfg(feature = "aws-lc-rs")]
-        let bytes = self.context.finish();
-        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-        let bytes = self.context.finish().expect("hasher finish failed");
-        ArtifactDigest::new(self.algorithm, bytes.as_ref())
+    pub fn finalize(self) -> ArtifactDigest {
+        let bytes = self.context.finalize_vec();
+        ArtifactDigest::new(self.algorithm, bytes)
             .expect("backend digest length does not match the algorithm's documented length")
     }
 }
@@ -158,64 +80,25 @@ impl HashUpdate for Sha256Hasher {
 
 /// Incremental SHA-256 hasher
 pub struct Sha256Hasher {
-    #[cfg(feature = "aws-lc-rs")]
-    context: Context,
-    #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-    context: Hasher,
+    context: DigestContext,
 }
 
 impl Sha256Hasher {
     /// Create a new SHA-256 hasher
     pub fn new() -> Self {
-        #[cfg(feature = "aws-lc-rs")]
-        {
-            Self {
-                context: Context::new(&SHA256),
-            }
-        }
-        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-        {
-            Self {
-                context: Hasher::new(MessageDigest::sha256())
-                    .expect("SHA-256 hasher initialization failed"),
-            }
+        Self {
+            context: DigestContext::new_sha256(),
         }
     }
 
     /// Update the hasher with data
     pub fn update(&mut self, data: &[u8]) {
-        #[cfg(feature = "aws-lc-rs")]
         self.context.update(data);
-        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-        self.context.update(data).expect("hasher update failed");
     }
 
     /// Finalize and get the digest as a typed hash
-    #[allow(unused_mut)]
-    pub fn finalize(mut self) -> Sha256Hash {
-        #[cfg(feature = "aws-lc-rs")]
-        {
-            let digest = self.finish_digest();
-            let mut result = [0u8; 32];
-            result.copy_from_slice(digest.as_ref());
-            Sha256Hash::new(result)
-        }
-        #[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
-        {
-            let digest = self.context.finish().expect("hasher finish failed");
-            let mut result = [0u8; 32];
-            result.copy_from_slice(&digest);
-            Sha256Hash::new(result)
-        }
-    }
-
-    /// Finalize and return the raw aws-lc-rs digest.
-    ///
-    /// Crate-internal so that [`crate::KeyPair::sign_prehashed`] can sign the
-    /// digest directly without leaking aws-lc-rs types into the public API.
-    #[cfg(feature = "aws-lc-rs")]
-    pub(crate) fn finish_digest(self) -> digest::Digest {
-        self.context.finish()
+    pub fn finalize(self) -> Sha256Hash {
+        Sha256Hash::new(self.context.finalize_sha256())
     }
 }
 

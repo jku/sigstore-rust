@@ -8,6 +8,14 @@
 #[cfg(not(any(feature = "aws-lc-rs", feature = "boring")))]
 compile_error!("Either feature \"aws-lc-rs\" or \"boring\" must be enabled for sigstore-crypto.");
 
+#[cfg(feature = "aws-lc-rs")]
+#[path = "backend/aws_lc.rs"]
+mod backend;
+
+#[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+#[path = "backend/boring.rs"]
+mod backend;
+
 pub mod checkpoint;
 pub mod error;
 pub mod hash;
