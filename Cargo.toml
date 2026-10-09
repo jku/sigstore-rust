@@ -35,6 +35,7 @@ thiserror = "2.0"
 
 # Cryptography
 aws-lc-rs = { version = "1.18" }
+boring = { version = "5", features = ["mldsa"] }
 sha2 = "0.11"
 digest = "0.11"
 signature = "3.0"

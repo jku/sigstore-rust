@@ -252,8 +252,7 @@ mod tests {
             (SigningScheme::MlDsa65, ML_DSA_65),
             (SigningScheme::MlDsa87, ML_DSA_87),
         ] {
-            let (mldsa_pk, mldsa_sig) =
-                crate::aws_lc::test_support::sign_mldsa(scheme, &seed, msg);
+            let (mldsa_pk, mldsa_sig) = crate::aws_lc::test_support::sign_mldsa(scheme, &seed, msg);
             assert!(alg
                 .verify_signature(&mldsa_pk, msg, mldsa_sig.as_bytes())
                 .is_ok());

@@ -184,4 +184,3 @@ pub fn default_provider() -> &'static dyn CryptoProvider {
 pub fn aws_lc_provider() -> &'static dyn CryptoProvider {
     &crate::aws_lc::AWS_LC_PROVIDER
 }
-

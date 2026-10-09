@@ -28,3 +28,6 @@ base64 = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 insta = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+boring = { workspace = true }
