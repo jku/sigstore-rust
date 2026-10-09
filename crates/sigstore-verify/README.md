@@ -32,12 +32,14 @@ supply). A bundle of the other kind is rejected.
    policy's key
 6. Check that the log entry describes this bundle and artifact
 
-## Offline verification
+## Offline verification and backends
 
 The default `sigstore-verify` dependency tree has no HTTP client or Tokio runtime.
 Verification always uses the supplied trusted root and never fetches artifacts
-or keys. Enable `tuf` plus `rustls` (default) or `native-tls` when the application
-also needs network trust-root refreshes.
+or keys. Enable `tuf` plus `rustls` (default), `rustls-no-provider`, or `native-tls`
+when the application also needs network trust-root refreshes. To use BoringSSL
+instead of `aws-lc-rs`, build with `default-features = false, features = ["boring"]`
+(and add `"tuf", "rustls-no-provider"` or `"native-tls"` if TUF fetching is needed).
 
 ## Verifier construction
 

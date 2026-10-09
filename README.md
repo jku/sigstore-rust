@@ -151,18 +151,60 @@ cargo run -p sigstore-verify --example verify_bundle -- \
 - Identity-based verification policies
 - Ambient credential detection for CI/CD environments
 
-## Cryptography
+## Cryptographic and TLS Backends
 
-This library uses [aws-lc-rs](https://github.com/aws/aws-lc-rs) as its cryptographic backend. AWS-LC is a general-purpose cryptographic library maintained by AWS, based on code from BoringSSL. It provides:
+By default, `sigstore-rust` uses:
+- **[`aws-lc-rs`](https://github.com/aws/aws-lc-rs)** for Sigstore cryptographic operations and X.509 chain validation (`sigstore-crypto`), and
+- **[`rustls`](https://github.com/rustls/rustls)** (backed by `aws-lc-rs`) for outbound HTTPS connections (`reqwest`).
 
-- ECDSA (P-256, P-384) signature verification and signing
-- Ed25519 signature support
-- SHA-256/SHA-384/SHA-512 hashing
-- X.509 certificate parsing and validation
+Both layers can be configured via Cargo features for applications that already link BoringSSL (`boring`), `ring`, or OS-native TLS (`native-tls`) and want to avoid compiling `aws-lc-rs`.
 
-AWS-LC has a [FIPS 140-3 validated module](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4816).
+### Cargo Features
+
+| Feature | Layer | Description |
+|---------|-------|-------------|
+| `aws-lc-rs` *(default)* | Sigstore crypto | Use `aws-lc-rs` for hashing, signing, and signature/X.509 verification |
+| `boring` | Sigstore crypto | Use Cloudflare's [`boring`](https://github.com/cloudflare/boring) (BoringSSL) instead of `aws-lc-rs` |
+| `rustls` *(default)* | HTTP / TLS | Use `reqwest/rustls` (which enables `rustls`'s default `aws-lc-rs` TLS provider) |
+| `rustls-no-provider` | HTTP / TLS | Use `reqwest/rustls-no-provider` so `rustls` does not pull in `aws-lc-rs`; requires installing a process-wide `rustls::crypto::CryptoProvider` at startup |
+| `native-tls` | HTTP / TLS | Use the platform's native TLS stack (OpenSSL / Secure Transport / SChannel) instead of `rustls` |
+
+### Example 1: Offline Verification with BoringSSL (No TLS / HTTP)
+
+```toml
+[dependencies]
+sigstore-verify = { version = "0.14", default-features = false, features = ["boring"] }
+sigstore-trust-root = { version = "0.14", default-features = false, features = ["boring"] }
+```
+
+### Example 2: Networked Verification or Signing with BoringSSL + `rustls-no-provider`
+
+Note that enabling `rustls` on `reqwest` pulls in `aws-lc-rs` as `rustls`'s default TLS crypto provider. To use `rustls` for HTTPS (e.g., TUF trust-root updates or keyless signing) without linking `aws-lc-rs`, combine `boring` with `rustls-no-provider` (or `native-tls`):
+
+```toml
+[dependencies]
+sigstore-verify = { version = "0.14", default-features = false, features = ["tuf", "rustls-no-provider", "boring"] }
+sigstore-trust-root = { version = "0.14", default-features = false, features = ["tuf", "rustls-no-provider", "boring"] }
+```
+
+When using `rustls-no-provider`, install your chosen [`rustls::crypto::CryptoProvider`](https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html) (such as `boring-rustls-provider` or `rustls::crypto::ring`) once at application startup before creating any HTTP clients:
+
+```rust,ignore
+fn main() {
+    boring_rustls_provider::provider()
+        .install_default()
+        .expect("install rustls crypto provider");
+    // ...
+}
+```
+
+*(Note: In `sigstore-oidc`, `IdentityToken::detect_ambient()` uses the `ambient-id` crate, which only exposes `rustls` and `native-tls` features.)*
+
+### FIPS Note
+
+AWS-LC has a [FIPS 140-3 validated module](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4816), and BoringSSL has FIPS-validated module builds.
 This workspace does not enable a FIPS build by default and does not claim FIPS
-validation for sigstore-rust. Compliance depends on the exact module build,
+validation for `sigstore-rust`. Compliance depends on the exact module build,
 configuration, platform, and approved operations.
 
 ## Minimum Supported Rust Version

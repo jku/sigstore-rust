@@ -4,40 +4,42 @@ Cryptographic primitives for [sigstore-rust](https://github.com/sigstore/sigstor
 
 ## Overview
 
-This crate provides key generation, signing, and verification functionality using `aws-lc-rs` as the cryptographic backend. It supports the key types and signature algorithms used in the Sigstore ecosystem.
+This crate provides key generation, signing, verification, hashing, and `rustls-webpki` signature verification algorithms for the Sigstore ecosystem, using either `aws-lc-rs` (default) or `boring` (BoringSSL) as the cryptographic backend.
 
-## Features
+## Cargo Features
 
-- **Key generation**: Ed25519, ECDSA P-256, ECDSA P-384
-- **Signing and verification**: Multiple signature schemes with automatic algorithm detection
-- **Checkpoint verification**: Extension trait for verifying signed tree head signatures
-- **Certificate parsing**: X.509 certificate information extraction
-- **Keyring**: Key management for multi-key verification scenarios
-- **Hash functions**: SHA-256, SHA-384, SHA-512
+- `aws-lc-rs` *(default)* — Use [`aws-lc-rs`](https://github.com/aws/aws-lc-rs) as the cryptographic backend.
+- `boring` — Use [`boring`](https://github.com/cloudflare/boring) (BoringSSL) as the cryptographic backend:
+  ```toml
+  [dependencies]
+  sigstore-crypto = { version = "0.14", default-features = false, features = ["boring"] }
+  ```
 
 ## Supported Algorithms
 
 | Algorithm | Key Generation | Signing | Verification |
 |-----------|---------------|---------|--------------|
-| Ed25519 | Yes | Yes | Yes |
-| ECDSA P-256 (SHA-256) | Yes | Yes | Yes |
-| ECDSA P-384 (SHA-384) | Yes | Yes | Yes |
+| ECDSA P-256 (SHA-256 / SHA-384) | Yes (P-256) | Yes (SHA-256) | Yes |
+| ECDSA P-384 (SHA-256 / SHA-384) | No | No | Yes |
+| Ed25519 | No | No | Yes |
+| RSA PKCS#1 v1.5 & PSS (2048–8192 bits, SHA-256 / 384 / 512) | No | No | Yes |
+| ML-DSA-44 / ML-DSA-65 / ML-DSA-87 (FIPS 204) | No | No | Yes |
 
 ## Usage
 
 ```rust
-use sigstore_crypto::{KeyPair, SigningScheme, verify_signature};
+use sigstore_crypto::{KeyAlgorithm, KeyPair, SigningScheme, verify_signature};
 
-// Generate a new key pair
-let keypair = KeyPair::generate(SigningScheme::EcdsaP256Sha256)?;
+// Generate a new ECDSA P-256 key pair
+let keypair = KeyPair::generate(KeyAlgorithm::EcdsaP256)?;
 
 // Sign data
 let signature = keypair.sign(b"message")?;
 
 // Verify a signature
 verify_signature(
-    &public_key_der,
-    message,
+    &keypair.public_key_der()?,
+    b"message",
     &signature,
     SigningScheme::EcdsaP256Sha256,
 )?;
