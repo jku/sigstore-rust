@@ -1,7 +1,7 @@
 //! `aws-lc-rs` cryptographic backend implementation.
 
 use crate::error::{Error, Result};
-use crate::signing::SigningScheme;
+use crate::signing::{KeyAlgorithm, SigningScheme};
 use aws_lc_rs::{
     digest::{self, Context, Digest, SHA256, SHA384, SHA512},
     rand::SystemRandom,
@@ -13,7 +13,6 @@ use aws_lc_rs::{
         RSA_PSS_2048_8192_SHA256, RSA_PSS_2048_8192_SHA384, RSA_PSS_2048_8192_SHA512,
     },
 };
-use der::Decode as _;
 use sigstore_types::HashAlgorithm;
 
 pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
@@ -82,8 +81,6 @@ impl EcdsaP256KeyPair {
     }
 
     pub(crate) fn from_pkcs8_der(pkcs8: &[u8]) -> Result<Self> {
-        // Ensure outer DER has no trailing bytes before parsing.
-        der::asn1::AnyRef::from_der(pkcs8).map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
         let kp = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8)
             .map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
         Ok(Self(kp))
@@ -123,12 +120,27 @@ fn verification_algorithm(scheme: SigningScheme) -> &'static dyn VerificationAlg
     }
 }
 
+fn check_ec_uncompressed_point(
+    scheme: SigningScheme,
+    pubkey_bytes: &[u8],
+) -> std::result::Result<(), ()> {
+    if matches!(
+        scheme.key_algorithm(),
+        KeyAlgorithm::EcdsaP256 | KeyAlgorithm::EcdsaP384
+    ) && pubkey_bytes.first() != Some(&0x04)
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
 pub(crate) fn verify_raw(
     scheme: SigningScheme,
     pubkey_bytes: &[u8],
     data: &[u8],
     signature: &[u8],
 ) -> std::result::Result<(), ()> {
+    check_ec_uncompressed_point(scheme, pubkey_bytes)?;
     let key = UnparsedPublicKey::new(verification_algorithm(scheme), pubkey_bytes);
     key.verify(data, signature).map_err(|_| ())
 }
@@ -139,6 +151,7 @@ pub(crate) fn verify_prehashed(
     digest: &[u8],
     signature: &[u8],
 ) -> std::result::Result<(), ()> {
+    check_ec_uncompressed_point(scheme, pubkey_bytes)?;
     let aws_algo = match scheme.hash_algorithm() {
         Some(HashAlgorithm::Sha2256) => &SHA256,
         Some(HashAlgorithm::Sha2384) => &SHA384,

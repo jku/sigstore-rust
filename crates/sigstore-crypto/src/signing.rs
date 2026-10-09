@@ -227,6 +227,9 @@ impl KeyPair {
     ///
     /// Only ECDSA P-256 keys are supported today.
     pub fn from_pkcs8_der(pkcs8: &[u8]) -> Result<Self> {
+        use der::Decode as _;
+        // Ensure outer DER has no trailing bytes before passing to the backend.
+        der::asn1::AnyRef::from_der(pkcs8).map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
         Ok(Self(KeyPairInner::EcdsaP256(
             EcdsaP256KeyPair::from_pkcs8_der(pkcs8)?,
         )))

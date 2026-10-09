@@ -10,11 +10,17 @@ compile_error!("Either feature \"aws-lc-rs\" or \"boring\" must be enabled for s
 
 #[cfg(feature = "aws-lc-rs")]
 #[path = "backend/aws_lc.rs"]
-mod backend;
+mod aws_lc;
 
-#[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+#[cfg(feature = "boring")]
+#[cfg_attr(feature = "aws-lc-rs", allow(dead_code))]
 #[path = "backend/boring.rs"]
-mod backend;
+mod boring;
+
+#[cfg(feature = "aws-lc-rs")]
+use aws_lc as backend;
+#[cfg(all(feature = "boring", not(feature = "aws-lc-rs")))]
+use boring as backend;
 
 pub mod checkpoint;
 pub mod error;

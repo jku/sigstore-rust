@@ -92,9 +92,6 @@ impl EcdsaP256KeyPair {
     }
 
     pub(crate) fn from_pkcs8_der(pkcs8: &[u8]) -> Result<Self> {
-        // BoringSSL's `d2i_PKCS8_PRIV_KEY_INFO` ignores trailing bytes; verify
-        // that `pkcs8` is a single complete DER element first.
-        der::asn1::AnyRef::from_der(pkcs8).map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
         let pkey = PKey::private_key_from_pkcs8(pkcs8)
             .map_err(|e| Error::InvalidKeyFormat(e.to_string()))?;
         let ec_key = pkey
@@ -277,6 +274,9 @@ fn verify_ed25519(
 }
 
 fn parse_rsa_public_key(pubkey_bytes: &[u8]) -> std::result::Result<Rsa<Public>, ()> {
+    // BoringSSL's `d2i_RSAPublicKey` ignores trailing bytes, and `webpki` passes
+    // raw SPKI key bytes without going through `VerificationKey::from_spki`.
+    // Validate strict PKCS#1 `RSAPublicKey` DER structure first.
     RsaPublicKey::from_der(pubkey_bytes).map_err(|_| ())?;
     let rsa = Rsa::public_key_from_der_pkcs1(pubkey_bytes).map_err(|_| ())?;
     let bits = rsa.n().num_bits();
@@ -313,6 +313,14 @@ fn verify_rsa(
     }
 }
 
+/// Prehashed RSA PKCS#1 v1.5 verification.
+///
+/// The safe `boring` crate (v5) only wraps streaming `EVP_DigestVerify*`
+/// (`boring::sign::Verifier`) and does not expose a safe wrapper around
+/// `EVP_PKEY_verify` or `RSA_verify` for precomputed digests. To keep this
+/// crate free of `unsafe` FFI and `boring-sys` dependencies, we use BoringSSL's
+/// `Rsa::public_decrypt(..., Padding::PKCS1)` and verify the RFC 8017 §9.2
+/// `DigestInfo` encoding in [`verify_emsa_pkcs1_digest_info`].
 fn verify_rsa_pkcs1_prehashed(
     pubkey_bytes: &[u8],
     hash_alg: HashAlgorithm,
@@ -393,6 +401,14 @@ pub(crate) fn verify_emsa_pkcs1_digest_info(
     }
 }
 
+/// Prehashed RSA-PSS verification.
+///
+/// The safe `boring` crate (v5) only wraps streaming `EVP_DigestVerify*`
+/// (`boring::sign::Verifier`) and does not expose a safe wrapper around
+/// `EVP_PKEY_verify` or `RSA_verify_pss_mgf1` for precomputed digests. To keep
+/// this crate free of `unsafe` FFI and `boring-sys` dependencies, we recover the
+/// encoded message via BoringSSL's `Rsa::public_decrypt(..., Padding::NONE)` and
+/// verify RFC 8017 §9.1.2 `EMSA-PSS-VERIFY` in [`verify_emsa_pss`].
 fn verify_rsa_pss_prehashed(
     pubkey_bytes: &[u8],
     md: MessageDigest,

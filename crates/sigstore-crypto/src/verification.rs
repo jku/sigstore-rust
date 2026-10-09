@@ -599,4 +599,191 @@ mod tests {
         assert!(vk.verify([0x72], &sig).is_ok());
         assert!(vk.verify([0x73], &sig).is_err());
     }
+
+    #[test]
+    fn test_ec_compressed_point_rejected() {
+        // Compressed SEC1 point prefix (0x02) must be rejected by both backends.
+        let mut compressed = [0u8; 33];
+        compressed[0] = 0x02;
+        let spki = spki_der(ID_EC_PUBLIC_KEY, Some(SECP_256_R_1), &compressed);
+        let vk = VerificationKey::from_spki(&spki).unwrap();
+        let dummy_sig = SignatureBytes::new(vec![0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x01]);
+        assert!(vk.verify(b"msg", &dummy_sig).is_err());
+        let digest = crate::hash::sha256(b"msg");
+        assert!(vk.verify_prehashed(digest.as_bytes(), &dummy_sig).is_err());
+    }
+
+    #[cfg(all(feature = "aws-lc-rs", feature = "boring"))]
+    #[test]
+    fn cross_backend_signature_interoperability() {
+        let data = b"cross-backend interoperability test payload";
+        let digest256 = crate::aws_lc::sha256(data);
+        assert_eq!(digest256, crate::boring::sha256(data));
+        let digest384 = crate::aws_lc::sha384(data);
+        assert_eq!(digest384, crate::boring::sha384(data));
+        let digest512 = crate::aws_lc::sha512(data);
+        assert_eq!(digest512, crate::boring::sha512(data));
+
+        // 1. ECDSA P-256 PKCS#8 + signing cross-verification
+        for pkcs8 in [
+            crate::aws_lc::test_support::generate_p256_pkcs8(),
+            crate::boring::test_support::generate_p256_pkcs8(),
+        ] {
+            let aws_kp = crate::aws_lc::EcdsaP256KeyPair::from_pkcs8_der(&pkcs8).unwrap();
+            let bor_kp = crate::boring::EcdsaP256KeyPair::from_pkcs8_der(&pkcs8).unwrap();
+            assert_eq!(aws_kp.public_key_bytes(), bor_kp.public_key_bytes());
+
+            let aws_sig = aws_kp.sign_digest(&digest256).unwrap();
+            let bor_sig = bor_kp.sign_digest(&digest256).unwrap();
+
+            assert!(crate::boring::verify_raw(
+                SigningScheme::EcdsaP256Sha256,
+                aws_kp.public_key_bytes(),
+                data,
+                &aws_sig
+            )
+            .is_ok());
+            assert!(crate::aws_lc::verify_raw(
+                SigningScheme::EcdsaP256Sha256,
+                bor_kp.public_key_bytes(),
+                data,
+                &bor_sig
+            )
+            .is_ok());
+        }
+
+        // 2. ECDSA P-384 cross-verification
+        let (p384_aws_pk, p384_aws_sig) = crate::aws_lc::test_support::sign_p384_sha384(data);
+        assert!(crate::boring::verify_raw(
+            SigningScheme::EcdsaP384Sha384,
+            &p384_aws_pk,
+            data,
+            p384_aws_sig.as_bytes()
+        )
+        .is_ok());
+        let (p384_bor_pk, p384_bor_sig) = crate::boring::test_support::sign_p384_sha384(data);
+        assert!(crate::aws_lc::verify_raw(
+            SigningScheme::EcdsaP384Sha384,
+            &p384_bor_pk,
+            data,
+            p384_bor_sig.as_bytes()
+        )
+        .is_ok());
+
+        // 3. Ed25519 cross-verification
+        let (ed_aws_pk, ed_aws_sig) = crate::aws_lc::test_support::sign_ed25519(data);
+        assert!(crate::boring::verify_raw(
+            SigningScheme::Ed25519,
+            &ed_aws_pk,
+            data,
+            ed_aws_sig.as_bytes()
+        )
+        .is_ok());
+        let (ed_bor_pk, ed_bor_sig) = crate::boring::test_support::sign_ed25519(data);
+        assert!(crate::aws_lc::verify_raw(
+            SigningScheme::Ed25519,
+            &ed_bor_pk,
+            data,
+            ed_bor_sig.as_bytes()
+        )
+        .is_ok());
+
+        // 4. RSA PKCS#1 v1.5 and PSS (SHA-256, SHA-384, SHA-512) streaming & prehashed
+        for (hash_alg, digest, pkcs1_scheme, pss_scheme) in [
+            (
+                HashAlgorithm::Sha2256,
+                &digest256[..],
+                SigningScheme::RsaPkcs1Sha256,
+                SigningScheme::RsaPssSha256,
+            ),
+            (
+                HashAlgorithm::Sha2384,
+                &digest384[..],
+                SigningScheme::RsaPkcs1Sha384,
+                SigningScheme::RsaPssSha384,
+            ),
+            (
+                HashAlgorithm::Sha2512,
+                &digest512[..],
+                SigningScheme::RsaPkcs1Sha512,
+                SigningScheme::RsaPssSha512,
+            ),
+        ] {
+            let (aws_rsa_pk, aws_pkcs1, aws_pss) =
+                crate::aws_lc::test_support::sign_rsa(data, hash_alg);
+            assert!(crate::boring::verify_raw(
+                pkcs1_scheme,
+                aws_rsa_pk.as_bytes(),
+                data,
+                aws_pkcs1.as_bytes()
+            )
+            .is_ok());
+            assert!(crate::boring::verify_prehashed(
+                pkcs1_scheme,
+                aws_rsa_pk.as_bytes(),
+                digest,
+                aws_pkcs1.as_bytes()
+            )
+            .is_ok());
+            assert!(crate::boring::verify_raw(
+                pss_scheme,
+                aws_rsa_pk.as_bytes(),
+                data,
+                aws_pss.as_bytes()
+            )
+            .is_ok());
+            assert!(crate::boring::verify_prehashed(
+                pss_scheme,
+                aws_rsa_pk.as_bytes(),
+                digest,
+                aws_pss.as_bytes()
+            )
+            .is_ok());
+
+            let (bor_rsa_pk, bor_pkcs1, bor_pss) =
+                crate::boring::test_support::sign_rsa(data, hash_alg);
+            assert!(crate::aws_lc::verify_raw(
+                pkcs1_scheme,
+                bor_rsa_pk.as_bytes(),
+                data,
+                bor_pkcs1.as_bytes()
+            )
+            .is_ok());
+            assert!(crate::aws_lc::verify_prehashed(
+                pkcs1_scheme,
+                bor_rsa_pk.as_bytes(),
+                digest,
+                bor_pkcs1.as_bytes()
+            )
+            .is_ok());
+            assert!(crate::aws_lc::verify_raw(
+                pss_scheme,
+                bor_rsa_pk.as_bytes(),
+                data,
+                bor_pss.as_bytes()
+            )
+            .is_ok());
+            assert!(crate::aws_lc::verify_prehashed(
+                pss_scheme,
+                bor_rsa_pk.as_bytes(),
+                digest,
+                bor_pss.as_bytes()
+            )
+            .is_ok());
+        }
+
+        // 5. ML-DSA-44/65/87 cross-verification (and deterministic key derivation check)
+        let seed = [0x7bu8; 32];
+        for scheme in [
+            SigningScheme::MlDsa44,
+            SigningScheme::MlDsa65,
+            SigningScheme::MlDsa87,
+        ] {
+            let (aws_pk, aws_sig) = crate::aws_lc::test_support::sign_mldsa(scheme, &seed, data);
+            let (bor_pk, bor_sig) = crate::boring::test_support::sign_mldsa(scheme, &seed, data);
+            assert_eq!(aws_pk, bor_pk);
+            assert!(crate::boring::verify_raw(scheme, &aws_pk, data, aws_sig.as_bytes()).is_ok());
+            assert!(crate::aws_lc::verify_raw(scheme, &bor_pk, data, bor_sig.as_bytes()).is_ok());
+        }
+    }
 }

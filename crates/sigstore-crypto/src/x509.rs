@@ -225,8 +225,6 @@ pub fn parse_certificate_info(cert_der: &DerCertificate) -> Result<CertificateIn
             .map_err(|e| Error::InvalidCertificate(format!("invalid notAfter time: {}", e)))?;
 
     // Extract public key in SPKI (SubjectPublicKeyInfo) DER format
-    // This is required by aws-lc-rs UnparsedPublicKey, which expects the full SPKI,
-    // not just the raw key bytes
     let public_key_info = &cert.tbs_certificate.subject_public_key_info;
     let public_key_der = public_key_info
         .to_der()
