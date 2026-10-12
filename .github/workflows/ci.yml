@@ -90,9 +90,13 @@ jobs:
         run: rustup toolchain install
       - name: Run tests
         run: cargo test --all-features --workspace
-      - name: Run sigstore-crypto tests (--no-default-features with BoringProvider)
+      - name: Run sigstore-crypto BoringProvider tests
         if: runner.os == 'Linux'
-        run: cargo test --no-default-features -p sigstore-crypto
+        env:
+          RUSTFLAGS: --cfg sigstore_boring_test -D warnings
+        run: |
+          cargo test --test boring_provider -p sigstore-crypto
+          cargo test --test boring_provider --no-default-features -p sigstore-crypto
 
   check-native-tls:
     name: Check Native TLS (${{ matrix.os }})

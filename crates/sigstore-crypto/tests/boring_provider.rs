@@ -8,11 +8,13 @@
 //!    `openssl`, or a custom FFI function table) without depending on `aws-lc-rs`.
 //! 2. **Anti-bitrot regression test**: Installed as the process-wide default
 //!    provider in this test binary via [`install_default_provider`] and exercised
-//!    under both `cargo test -p sigstore-crypto --no-default-features` and
-//!    `cargo test -p sigstore-crypto` (including cross-provider interoperability
-//!    against [`sigstore_crypto::aws_lc_provider()`] when `aws-lc-rs` is enabled).
+//!    with `RUSTFLAGS="--cfg sigstore_boring_test"` under both
+//!    `cargo test --test boring_provider -p sigstore-crypto --no-default-features`
+//!    and `cargo test --test boring_provider -p sigstore-crypto` (including
+//!    cross-provider interoperability against [`sigstore_crypto::aws_lc_provider()`]
+//!    when `aws-lc-rs` is enabled).
 
-#![cfg(target_os = "linux")]
+#![cfg(sigstore_boring_test)]
 
 use boring::{
     bn::BigNumContext,

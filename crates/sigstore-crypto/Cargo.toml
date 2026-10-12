@@ -29,5 +29,8 @@ futures = { workspace = true }
 hex = { workspace = true }
 insta = { workspace = true }
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(sigstore_boring_test)'] }
+
+[target.'cfg(sigstore_boring_test)'.dev-dependencies]
 boring = { workspace = true }
