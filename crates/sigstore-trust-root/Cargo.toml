@@ -34,9 +34,6 @@ serde_json = { workspace = true }
 # Time handling
 jiff = { workspace = true }
 
-# Utilities
-hex = { workspace = true }
-
 # TUF feature dependencies (optional). The TUF client (metadata fetch +
 # verification) is now provided by the in-workspace `sigstore-tuf` crate, which
 # brings its own HTTP transport and (via the `rustls` feature) TLS backend.
@@ -51,6 +48,7 @@ name = "update-embedded-roots"
 required-features = ["tuf"]
 
 [dev-dependencies]
+hex = { workspace = true }
 tempfile = { workspace = true }
 # For building signed TUF fixtures in offline-cache tests
 sha2 = { workspace = true }
