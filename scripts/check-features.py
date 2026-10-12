@@ -32,6 +32,6 @@ for package, flags in [
          "--edges", "normal", "--prefix", "none", *flags], text=True,
     )
     dependencies = {line.split()[0] for line in tree.splitlines() if line.strip()}
-    forbidden = dependencies & {"reqwest", "hyper", "tokio"}
+    forbidden = dependencies & {"reqwest", "hyper", "tokio", "rand"}
     if forbidden:
         raise SystemExit(f"{package} unexpectedly requires {sorted(forbidden)}")

@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 [features]
 default = ["rustls"]
-client = ["dep:reqwest"]
+client = ["dep:reqwest", "dep:rand"]
 rustls = ["client", "reqwest/rustls"]
 native-tls = ["client", "reqwest/native-tls"]
 
@@ -21,7 +21,7 @@ const-oid = { workspace = true, features = ["db"] }
 reqwest = { workspace = true, optional = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
-rand = { workspace = true }
+rand = { workspace = true, optional = true }
 
 # RFC 3161 timestamp verification
 cms = { workspace = true, default-features = false }
@@ -39,4 +39,5 @@ hex = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "net", "io-util", "time"] }
 der = { workspace = true }
 hex = { workspace = true }
+rand = { workspace = true }
 serde_json = { workspace = true }
