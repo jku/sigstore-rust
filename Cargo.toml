@@ -35,7 +35,6 @@ thiserror = "2.0"
 
 # Cryptography
 aws-lc-rs = { version = "1.18" }
-sha2 = "0.11"
 rand = "0.10.0"
 
 # ASN.1 / X.509
