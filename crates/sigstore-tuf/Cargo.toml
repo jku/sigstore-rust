@@ -29,9 +29,6 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Hashing (target/metadata integrity checks)
-sha2 = { workspace = true }
-
 # Glob matching within individual delegation path segments
 glob = { workspace = true }
 
@@ -51,6 +48,10 @@ tracing = { workspace = true }
 # `rustls` / `native-tls` features, matching the rest of the workspace.
 url = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
+
+[[example]]
+name = "conformance_client"
+required-features = ["client"]
 
 [dev-dependencies]
 # Only the test-runtime features are added here; the crates themselves are
