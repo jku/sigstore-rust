@@ -8,6 +8,7 @@ checks each crate in isolation (--package <crate>) to verify:
   1. Compilation with default features, no features, and each individual feature.
   2. Non-`rustls` features (such as `native-tls`) do not pull in `rustls`.
   3. Offline crate configurations do not pull in HTTP or async runtime crates.
+  4. Non-default feature configurations do not pull in `aws-lc-rs`.
 """
 import json
 import subprocess
@@ -52,7 +53,10 @@ for package in metadata["packages"]:
     # 2. Check that enabling all non-`rustls` features together (e.g.
     #    `native-tls`, `tuf`, `client`/`fetch`, `browser`) does not pull the
     #    `rustls` TLS stack into normal dependencies.
-    non_rustls = [f for f in package["features"] if f not in ("default", "rustls")]
+    non_rustls = [
+        f for f in package["features"]
+        if f not in ("default", "rustls", "rustls-no-provider")
+    ]
     flags = ["--no-default-features"]
     if non_rustls:
         flags += ["--features", ",".join(non_rustls)]
@@ -73,3 +77,22 @@ for package, flags in [
     forbidden = normal_dependencies(package, *flags) & {"reqwest", "hyper", "tokio", "rand"}
     if forbidden:
         raise SystemExit(f"{package} unexpectedly requires {sorted(forbidden)}")
+
+# 4. Check that consumers opting out of default features do not regain a hidden
+#    `aws-lc-rs` dependency.
+for package, flags in [
+    ("sigstore-crypto", ["--no-default-features"]),
+    ("sigstore-verify", ["--no-default-features"]),
+    ("sigstore-verify", ["--no-default-features", "--features", "tuf,rustls-no-provider"]),
+    ("sigstore-sign", ["--no-default-features", "--features", "tuf,rustls-no-provider"]),
+    ("sigstore-trust-root", ["--no-default-features"]),
+    ("sigstore-tuf", ["--no-default-features", "--features", "rustls-no-provider"]),
+    ("sigstore-rekor", ["--no-default-features"]),
+    ("sigstore-rekor", ["--no-default-features", "--features", "rustls-no-provider"]),
+    ("sigstore-fulcio", ["--no-default-features", "--features", "rustls-no-provider"]),
+    ("sigstore-oidc", ["--no-default-features", "--features", "rustls-no-provider"]),
+    ("sigstore-tsa", ["--no-default-features"]),
+    ("sigstore-tsa", ["--no-default-features", "--features", "rustls-no-provider"]),
+]:
+    if "aws-lc-rs" in normal_dependencies(package, *flags):
+        raise SystemExit(f"{package} {' '.join(flags)} unexpectedly requires aws-lc-rs")

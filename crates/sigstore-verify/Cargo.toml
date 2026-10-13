@@ -37,7 +37,9 @@ regex = { workspace = true }
 sigstore-trust-root = { workspace = true, features = ["tuf"] }
 
 [features]
-default = ["rustls"]
+default = ["rustls", "aws-lc-rs"]
 rustls = ["sigstore-trust-root/rustls"]
+rustls-no-provider = ["sigstore-trust-root/rustls-no-provider"]
 native-tls = ["sigstore-trust-root/native-tls"]
 tuf = ["sigstore-trust-root/tuf"]
+aws-lc-rs = ["sigstore-crypto/aws-lc-rs"]
