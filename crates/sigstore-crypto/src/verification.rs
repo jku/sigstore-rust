@@ -496,7 +496,7 @@ mod tests {
             .is_err());
             assert!(vk384.verify(data, &sig).is_ok());
             let sha384 = crate::hash::sha384(data);
-            assert!(vk384.verify_prehashed(&sha384, &sig).is_ok());
+            assert!(vk384.verify_prehashed(sha384.as_bytes(), &sig).is_ok());
 
             // Mismatched hash must fail closed.
             let vk256 =
@@ -583,7 +583,7 @@ mod tests {
                     .unwrap();
             assert!(vk_pkcs1_384.verify(data, &pkcs1_384).is_ok());
             assert!(vk_pkcs1_384
-                .verify_prehashed(&digest384, &pkcs1_384)
+                .verify_prehashed(digest384.as_bytes(), &pkcs1_384)
                 .is_ok());
             assert!(vk_pkcs1_384
                 .verify_prehashed(digest256.as_bytes(), &pkcs1_384)
@@ -602,7 +602,9 @@ mod tests {
                 VerificationKey::from_spki_with_scheme(&spki384, SigningScheme::RsaPssSha384)
                     .unwrap();
             assert!(vk_pss_384.verify(data, &pss_384).is_ok());
-            assert!(vk_pss_384.verify_prehashed(&digest384, &pss_384).is_ok());
+            assert!(vk_pss_384
+                .verify_prehashed(digest384.as_bytes(), &pss_384)
+                .is_ok());
             assert!(vk_pss_384
                 .verify_prehashed(digest256.as_bytes(), &pss_384)
                 .is_err());
@@ -620,7 +622,7 @@ mod tests {
                 .verify_prehashed(digest512.as_bytes(), &pkcs1_512)
                 .is_ok());
             assert!(vk_pkcs1_512
-                .verify_prehashed(&digest384, &pkcs1_512)
+                .verify_prehashed(digest384.as_bytes(), &pkcs1_512)
                 .is_err());
 
             let vk_pss_512 =
@@ -630,7 +632,9 @@ mod tests {
             assert!(vk_pss_512
                 .verify_prehashed(digest512.as_bytes(), &pss_512)
                 .is_ok());
-            assert!(vk_pss_512.verify_prehashed(&digest384, &pss_512).is_err());
+            assert!(vk_pss_512
+                .verify_prehashed(digest384.as_bytes(), &pss_512)
+                .is_err());
         }
 
         #[test]

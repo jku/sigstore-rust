@@ -3,7 +3,7 @@
 use crate::error::Result;
 use crate::provider::{default_provider, HashContext};
 use futures_io::AsyncRead;
-use sigstore_types::{ArtifactDigest, HashAlgorithm, Sha256Hash, Sha512Hash};
+use sigstore_types::{ArtifactDigest, HashAlgorithm, Sha256Hash, Sha384Hash, Sha512Hash};
 use std::future::Future;
 use std::io::{self, Read};
 use std::pin::Pin;
@@ -17,9 +17,9 @@ pub fn sha256(data: &[u8]) -> Sha256Hash {
     Sha256Hash::new(default_provider().sha256(data))
 }
 
-/// Hash data using SHA-384, returning raw bytes
-pub fn sha384(data: &[u8]) -> [u8; 48] {
-    default_provider().sha384(data)
+/// Hash data using SHA-384, returning a typed hash
+pub fn sha384(data: &[u8]) -> Sha384Hash {
+    Sha384Hash::new(default_provider().sha384(data))
 }
 
 /// Hash data using SHA-512, returning a typed hash
