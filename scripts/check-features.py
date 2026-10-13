@@ -70,6 +70,6 @@ for package, flags in [
     ("sigstore-tuf", ["--no-default-features"]),
     ("sigstore-trust-root", ["--no-default-features"]),
 ]:
-    forbidden = normal_dependencies(package, *flags) & {"reqwest", "hyper", "tokio"}
+    forbidden = normal_dependencies(package, *flags) & {"reqwest", "hyper", "tokio", "rand"}
     if forbidden:
         raise SystemExit(f"{package} unexpectedly requires {sorted(forbidden)}")
